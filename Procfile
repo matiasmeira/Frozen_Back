@@ -1,1 +1,1 @@
-web: gunicorn frozen_back.wsgi
+web: gunicorn frozen_back.frozen_back.wsgi
