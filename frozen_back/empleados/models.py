@@ -8,7 +8,7 @@ class Departamento(models.Model):
 
     class Meta:
         db_table = 'departamento'
-        managed = False
+        managed = True
 
 
 class Rol(models.Model):
@@ -17,7 +17,7 @@ class Rol(models.Model):
 
     class Meta:
         db_table = 'rol'
-        managed = False
+        managed = True
 
 
 class Turno(models.Model):
@@ -26,7 +26,7 @@ class Turno(models.Model):
 
     class Meta:
         db_table = 'turno'
-        managed = False
+        managed = True
 
 
 class JSONListField(models.JSONField):
@@ -52,7 +52,7 @@ class FaceID(models.Model):
 
     class Meta:
         db_table = 'faceid'
-        managed = False
+        managed = True
 
 
 class Empleado(models.Model):
@@ -68,7 +68,7 @@ class Empleado(models.Model):
 
     class Meta:
         db_table = 'empleado'
-        managed = False
+        managed = True
 
 
 class Fichada(models.Model):
@@ -80,7 +80,7 @@ class Fichada(models.Model):
 
     class Meta:
         db_table = 'fichada'
-        managed = False
+        managed = True
 
 
 
