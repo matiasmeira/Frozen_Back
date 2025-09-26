@@ -37,8 +37,8 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'frozen_back.login',
-    'frozen_back.empleados',
+    'login',
+    'empleados',
 ]
 
 MIDDLEWARE = [
