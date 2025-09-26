@@ -1,1 +1,1 @@
-web: PYTHONPATH=. gunicorn frozen_back.frozen_back.wsgi
+web: gunicorn frozen_back.wsgi --chdir /app/frozen_back
