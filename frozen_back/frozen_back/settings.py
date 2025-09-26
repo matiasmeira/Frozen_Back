@@ -76,10 +76,15 @@ WSGI_APPLICATION = 'frozen_back.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'railway',
+        'USER': 'postgres',
+        'PASSWORD': 'fUKjoTegeQgXKtUqgcMTbfLHDNxwxEOc',
+        'HOST': 'nozomi.proxy.rlwy.net',
+        'PORT': '57279',
     }
 }
+
 
 
 # Password validation
