@@ -1,14 +1,16 @@
 class LoginResponseDTO:
-    def __init__(self, nombre, apellido, rol):
+    def __init__(self, nombre, apellido, rol, vector):
         self.nombre = nombre
         self.apellido = apellido
         self.rol = rol
+        self.vector = vector
 
     def to_dict(self):
         return {
             "nombre": self.nombre,
             "apellido": self.apellido,
             "rol": self.rol,
+            "vector": self.vector,
         }
 
 

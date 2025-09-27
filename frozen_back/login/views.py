@@ -4,7 +4,7 @@ from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
 
 from .utils import buscar_empleado_por_vector_facial , registrar_fichada, obtener_info_empleado
-from empleados.models import Empleado , Fichada
+from empleados.models import Empleado , Fichada , FaceID
 from .dtos import LoginResponseDTO , FichajeResponseDTO
 
 
@@ -56,6 +56,7 @@ def login(request):
         nombre=empleado.nombre,
         apellido=empleado.apellido,
         rol=empleado.id_rol.descripcion,
+        vector=empleado.id_face.vector,
     )
 
     return JsonResponse(dto.to_dict())
