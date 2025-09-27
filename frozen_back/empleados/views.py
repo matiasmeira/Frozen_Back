@@ -6,6 +6,59 @@ from django.http import JsonResponse
 from .models import Empleado, FaceID, Rol
 from .dtos import CrearEmpleadoDTO, EmpleadoDTO , RolDTO
 
+from rest_framework import viewsets
+from .models import (
+    Departamento, Turno, FaceID, Rol, Empleado, Fichada,
+    Permiso, RolPermiso
+)
+
+from .serializers import (
+    DepartamentoSerializer, TurnoSerializer, FaceIDSerializer,
+    RolSerializer, EmpleadoSerializer, FichadaSerializer,
+    PermisoSerializer, RolPermisoSerializer
+)
+
+class DepartamentoViewSet(viewsets.ModelViewSet):
+    queryset = Departamento.objects.all()
+    serializer_class = DepartamentoSerializer
+
+
+class TurnoViewSet(viewsets.ModelViewSet):
+    queryset = Turno.objects.all()
+    serializer_class = TurnoSerializer
+
+
+class FaceIDViewSet(viewsets.ModelViewSet):
+    queryset = FaceID.objects.all()
+    serializer_class = FaceIDSerializer
+
+
+class PermisoViewSet(viewsets.ModelViewSet):
+    queryset = Permiso.objects.all()
+    serializer_class = PermisoSerializer
+
+
+class RolViewSet(viewsets.ModelViewSet):
+    queryset = Rol.objects.all()
+    serializer_class = RolSerializer
+
+
+class RolPermisoViewSet(viewsets.ModelViewSet):
+    queryset = RolPermiso.objects.all()
+    serializer_class = RolPermisoSerializer
+
+
+class EmpleadoViewSet(viewsets.ModelViewSet):
+    queryset = Empleado.objects.all()
+    serializer_class = EmpleadoSerializer
+
+
+class FichadaViewSet(viewsets.ModelViewSet):
+    queryset = Fichada.objects.all()
+    serializer_class = FichadaSerializer
+
+    
+
 def lista_empleados(request):
     empleados = Empleado.objects.select_related("id_rol", "id_turno").all()
 

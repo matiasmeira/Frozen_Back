@@ -84,6 +84,27 @@ class Fichada(models.Model):
 
 
 
+class Permiso(models.Model):
+    id_permiso = models.AutoField(primary_key=True)
+    titulo = models.CharField(max_length=100)
+    descripcion = models.TextField()
+    link = models.CharField(max_length=200)
+
+    class Meta:
+        db_table = 'permiso'
+        managed = True
+
+
+class RolPermiso(models.Model):
+    id_rol_permiso = models.AutoField(primary_key=True)
+    rol = models.ForeignKey(Rol, on_delete=models.CASCADE, db_column='id_rol')
+    permiso = models.ForeignKey(Permiso, on_delete=models.CASCADE, db_column='id_permiso')
+
+    class Meta:
+        db_table = 'rol_permiso'
+        managed = True
+        unique_together = ('rol', 'permiso')  # evita duplicados
+
 
 
   
