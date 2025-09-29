@@ -162,7 +162,7 @@ def listar_ordenes_venta(request):
             for orden in ordenes:
                 productos = [
                     {
-                        "id_producto": op.id_producto,
+                        "id_producto": op.id_producto.id_producto,
                         "producto": op.id_producto.nombre,
                         "tipo": op.id_producto.id_tipo_producto.descripcion if op.id_producto.id_tipo_producto else None,
                         "unidad": op.id_producto.id_unidad.descripcion if op.id_producto.id_unidad else None,
