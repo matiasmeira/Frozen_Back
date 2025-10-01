@@ -54,7 +54,9 @@ def crear_orden_venta(request):
             # Crear la orden de venta
             ordenVenta = OrdenVenta.objects.create(
                 id_cliente_id=data.get("id_cliente"),
-                id_estado_venta_id=3  # estado por defecto
+                id_estado_venta_id=3,  # estado por defecto
+                id_prioridad = data.get("id_prioridad"),
+                fecha_entrega = data.get("fecha_estrega")
             )
 
             productos = data.get("productos", [])
@@ -73,6 +75,8 @@ def crear_orden_venta(request):
                     "id": ordenVenta.id_cliente.id_cliente,
                     "nombre": ordenVenta.id_cliente.nombre
                 },
+                "prioridad": ordenVenta.id_prioridad.descripcion,
+                "fecha_entrega": ordenVenta.fecha_entrega,
                 "estado": {
                     "id": ordenVenta.id_estado_venta.id_estado_venta,
                     "descripcion": ordenVenta.id_estado_venta.descripcion
@@ -110,6 +114,17 @@ def actualizar_orden_venta(request):
                 ordenVenta = OrdenVenta.objects.get(pk=id_orden_venta)
             except OrdenVenta.DoesNotExist:
                 return JsonResponse({"error": "Orden de venta no encontrada"}, status=404)
+            
+            # Actualizar fecha_entrega y prioridad si vienen en el JSON
+            fecha_entrega = data.get("fecha_entrega")
+            prioridad = data.get("prioridad")
+
+            if fecha_entrega:
+                ordenVenta.fecha = fecha_entrega
+            if prioridad is not None:  
+                ordenVenta.id_prioridad = prioridad  
+
+            ordenVenta.save()
 
             # Eliminar los productos actuales de la orden
             OrdenVentaProducto.objects.filter(id_orden_venta=ordenVenta).delete()
@@ -162,6 +177,7 @@ def listar_ordenes_venta(request):
             for orden in ordenes:
                 productos = [
                     {
+                        "id_producto": op.id_producto,
                         "producto": op.id_producto.nombre,
                         "tipo": op.id_producto.id_tipo_producto.descripcion if op.id_producto.id_tipo_producto else None,
                         "unidad": op.id_producto.id_unidad.descripcion if op.id_producto.id_unidad else None,
