@@ -23,6 +23,7 @@ class Producto(models.Model):
     precio = models.DecimalField(max_digits=10, decimal_places=2)
     id_tipo_producto = models.ForeignKey(TipoProducto, on_delete=models.CASCADE, db_column="id_tipo_producto")
     id_unidad = models.ForeignKey(Unidad, on_delete=models.CASCADE, db_column="id_unidad")
+    dias_duracion = models.IntegerField()
 
     class Meta:
         db_table = "producto"
