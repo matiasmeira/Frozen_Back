@@ -57,10 +57,6 @@ class OrdenProduccionViewSet(viewsets.ModelViewSet):
         # Guardar la orden con todos los datos de la request y el estado inicial
         orden = serializer.save(id_estado_orden_produccion=estado_inicial)
 
-        # Validar que el producto exista
-        if not orden.id_producto:
-            raise drf_serializers.ValidationError("El producto es obligatorio para crear la orden.")
-
         # Buscar el estado "En espera" para el lote
         estado_espera = EstadoLoteProduccion.objects.get(descripcion__iexact="En espera")
 
