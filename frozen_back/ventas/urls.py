@@ -1,11 +1,12 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import EstadoVentaViewSet, ClienteViewSet, OrdenVentaViewSet, OrdenVentaProductoViewSet, crear_orden_venta, detalle_orden_venta  
+from .views import EstadoVentaViewSet, ClienteViewSet, OrdenVentaViewSet, OrdenVentaProductoViewSet, PrioridadViewSet, crear_orden_venta, detalle_orden_venta  
 from . import views
 
 router = DefaultRouter()
 router.register(r'estados-venta', EstadoVentaViewSet)
 router.register(r'clientes', ClienteViewSet)
+router.register(r'prioridades', PrioridadViewSet)
 router.register(r'ordenes-venta', OrdenVentaViewSet)
 router.register(r'ordenes-productos', OrdenVentaProductoViewSet)
 

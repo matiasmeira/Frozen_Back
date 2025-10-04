@@ -1,17 +1,22 @@
 import json
 from django.shortcuts import render
-from rest_framework import viewsets
+from rest_framework import viewsets, filters
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse
+from django_filters.rest_framework import DjangoFilterBackend
 
-from .models import EstadoVenta, Cliente, OrdenVenta, OrdenVentaProducto
+from .models import OrdenVenta
+from .filters import OrdenVentaFilter
+
+from .models import EstadoVenta, Cliente, OrdenVenta, OrdenVentaProducto, Prioridad
 from .serializers import (
     EstadoVentaSerializer,
     ClienteSerializer,
     OrdenVentaSerializer,
     OrdenVentaProductoSerializer,
+    PrioridadSerializer,
 )
 
 class EstadoVentaViewSet(viewsets.ModelViewSet):
@@ -24,9 +29,19 @@ class ClienteViewSet(viewsets.ModelViewSet):
     serializer_class = ClienteSerializer
 
 
+class PrioridadViewSet(viewsets.ModelViewSet):
+    queryset = Prioridad.objects.all()
+    serializer_class = PrioridadSerializer
+
+
 class OrdenVentaViewSet(viewsets.ModelViewSet):
-    queryset = OrdenVenta.objects.all()
+    queryset = OrdenVenta.objects.all().order_by('-fecha')
     serializer_class = OrdenVentaSerializer
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_class = OrdenVentaFilter
+    search_fields = ['id_cliente__nombre', 'id_estado_venta__descripcion', 'id_prioridad__descripcion']
+    ordering_fields = ['fecha', 'fecha_entrega']
+    ordering = ['-fecha']
 
 
 class OrdenVentaProductoViewSet(viewsets.ModelViewSet):
