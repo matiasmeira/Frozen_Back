@@ -1,3 +1,21 @@
 from django.db import models
+from productos.models import Producto
+from materias_primas.models import MateriaPrima
 
-# Create your models here.
+class Receta(models.Model):
+    id_receta = models.AutoField(primary_key=True)
+    id_producto = models.ForeignKey(Producto, on_delete=models.CASCADE, db_column="id_producto")
+    descripcion = models.TextField(blank=True, null=True)
+
+    class Meta:
+        db_table = "receta"
+
+
+class RecetaMateriaPrima(models.Model):
+    id_receta_materia_prima = models.AutoField(primary_key=True)
+    id_receta = models.ForeignKey(Receta, on_delete=models.CASCADE, db_column="id_receta")
+    id_materia_prima = models.ForeignKey(MateriaPrima, on_delete=models.CASCADE, db_column="id_materia_prima")
+    cantidad = models.IntegerField(blank=True, null=True)
+
+    class Meta:
+        db_table = "receta_materia_prima"
