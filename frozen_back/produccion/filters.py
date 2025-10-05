@@ -21,6 +21,9 @@ class OrdenProduccionFilter(django_filters.FilterSet):
     operario = django_filters.NumberFilter(
         field_name='id_operario__id_empleado'
     )
+    producto = django_filters.NumberFilter(
+        field_name='id_producto__id_producto', label='ID de Producto'
+    )
 
     class Meta:
         model = OrdenProduccion
@@ -29,6 +32,7 @@ class OrdenProduccionFilter(django_filters.FilterSet):
             'linea',
             'supervisor',
             'operario',
+            'producto',
             'fecha_desde',
             'fecha_hasta',
         ]
