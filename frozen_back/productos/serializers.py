@@ -28,7 +28,8 @@ class ProductoSerializer(serializers.ModelSerializer):
             'id_tipo_producto',
             'id_unidad',
             'tipo_producto',
-            'unidad'
+            'unidad',
+            'umbral_minimo'
         ]
 
 
@@ -37,4 +38,4 @@ class ProductoLiteSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Producto
-        fields = ["id_producto", "nombre", "descripcion", "unidad_medida"]
+        fields = ["id_producto", "nombre", "descripcion", "unidad_medida", "umbral_minimo"]
