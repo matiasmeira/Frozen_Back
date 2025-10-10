@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import EstadoVentaViewSet, ClienteViewSet, OrdenVentaViewSet, OrdenVentaProductoViewSet, PrioridadViewSet, crear_orden_venta, detalle_orden_venta, cambiar_estado_orden_venta  
+from .views import EstadoVentaViewSet, ClienteViewSet, OrdenVentaViewSet, OrdenVentaProductoViewSet, PrioridadViewSet, crear_orden_venta, detalle_orden_venta, cambiar_estado_orden_venta, obtener_facturacion  
 from . import views
 
 router = DefaultRouter()
@@ -16,7 +16,8 @@ urlpatterns = [
     path('ordenes-venta/actualizar/', views.actualizar_orden_venta, name = 'actualizar_orden_venta'),
     path('ordenes-venta/listar/', views.listar_ordenes_venta, name = 'listar_ordenes_venta'),
     path('ordenes_venta/cambiar_estado/', cambiar_estado_orden_venta, name='cambiar_estado_orden_venta'),
+    path("facturacion/<int:id_orden_venta>/", obtener_facturacion, name="obtener_facturacion"),
     path('', include(router.urls)),
   
-
+  
 ]

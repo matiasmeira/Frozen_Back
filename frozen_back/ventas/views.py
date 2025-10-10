@@ -6,11 +6,12 @@ from rest_framework.response import Response
 from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse
 from django_filters.rest_framework import DjangoFilterBackend
+from django.conf import settings
 from stock.models import LoteProduccion  # según tu estructura
 from django.db import models
 from rest_framework import status
 
-from .models import OrdenVenta
+from .models import Factura, OrdenVenta
 from .filters import OrdenVentaFilter
 
 from .models import EstadoVenta, Cliente, OrdenVenta, OrdenVentaProducto, Prioridad
@@ -504,3 +505,61 @@ def crear_orden_venta(request):
             return JsonResponse({"error": str(e)}, status=400)
 
     return JsonResponse({"error": "Método no permitido"}, status=405) 
+
+@csrf_exempt
+def obtener_facturacion(request, id_orden_venta):
+    if request.method == "GET":
+        try:
+            # Buscar orden de venta
+            orden = OrdenVenta.objects.select_related("id_cliente", "id_estado_venta", "id_prioridad").get(pk=id_orden_venta)
+        except OrdenVenta.DoesNotExist:
+            return JsonResponse({"error": "No se encontró la orden de venta"}, status=404)
+
+        # Buscar factura (si existe)
+        factura, creada = Factura.objects.get_or_create(id_orden_venta=orden)
+
+        # Obtener productos asociados
+        productos = OrdenVentaProducto.objects.select_related("id_producto").filter(id_orden_venta=orden)
+
+        productos_data = []
+        total = 0
+        for p in productos:
+            precio = getattr(p.id_producto, "precio", None)
+            subtotal = precio * p.cantidad if precio is not None else None
+            if subtotal:
+                total += subtotal
+
+            productos_data.append({
+                "producto": p.id_producto.nombre,
+                "cantidad": p.cantidad,
+                "precio_unitario": precio,
+                "subtotal": subtotal
+            })
+
+        data = {
+            "empresa": {
+                "nombre": settings.EMPRESA_NOMBRE,
+                "cuit": settings.EMPRESA_CUIT,
+                "direccion": settings.EMPRESA_DIRECCION,
+                "telefono": settings.EMPRESA_TELEFONO,
+                "email": settings.EMPRESA_MAIL
+            },
+            "factura": {
+                "id_factura": factura.id_factura if factura else None,
+                "id_orden_venta": orden.id_orden_venta,
+                "fecha": orden.fecha,
+                "estado_venta": orden.id_estado_venta.descripcion,
+                "prioridad": orden.id_prioridad.descripcion,
+                "fecha_entrega": orden.fecha_entrega
+            },
+            "cliente": {
+                "nombre": orden.id_cliente.nombre,
+                "email": orden.id_cliente.email
+            },
+            "productos": productos_data,
+            "total": total if total else "No disponible"
+        }
+
+        return JsonResponse(data, safe=False, json_dumps_params={"ensure_ascii": False})
+
+    return JsonResponse({"error": "Método no permitido"}, status=405)

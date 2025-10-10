@@ -164,3 +164,11 @@ EMAIL_USE_TLS = True
 EMAIL_HOST_USER = 'enviador.de.mail.automatico@gmail.com'
 EMAIL_HOST_PASSWORD = 'uaxk pbju aetw zfnh'
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+
+
+#Datos estaticos de la empresa
+EMPRESA_NOMBRE = 'Frozen SA'
+EMPRESA_CUIT = '20-544322334-1'
+EMPRESA_DIRECCION = 'Direccion Falsa 1234'
+EMPRESA_TELEFONO = '1169148628'
+EMPRESA_MAIL = 'frozensa@gmail.com'
