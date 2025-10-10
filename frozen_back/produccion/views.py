@@ -3,10 +3,10 @@ from rest_framework import viewsets, filters, serializers as drf_serializers, st
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
-
+from django.db import transaction
 from recetas.models import Receta, RecetaMateriaPrima
 from .models import EstadoOrdenProduccion, LineaProduccion, OrdenProduccion, NoConformidad
-from stock.models import EstadoLoteMateriaPrima, LoteMateriaPrima, LoteProduccion, EstadoLoteProduccion
+from stock.models import EstadoLoteMateriaPrima, LoteMateriaPrima, LoteProduccion, EstadoLoteProduccion, LoteProduccionMateria
 from .serializers import (
     EstadoOrdenProduccionSerializer,
     LineaProduccionSerializer,

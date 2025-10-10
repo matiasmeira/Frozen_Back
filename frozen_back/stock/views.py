@@ -9,7 +9,7 @@ from rest_framework.decorators import api_view  # <- IMPORT IMPORTANTE
 from django_filters.rest_framework import DjangoFilterBackend
 from stock.services import cantidad_total_disponible_producto,  verificar_stock_y_enviar_alerta
 from django.views.decorators.csrf import csrf_exempt
-
+from produccion.services import procesar_ordenes_en_espera
 
 from django_filters.rest_framework import DjangoFilterBackend
 from .models import (
@@ -56,6 +56,22 @@ class LoteMateriaPrimaViewSet(viewsets.ModelViewSet):
     filter_backends = [filters.SearchFilter, DjangoFilterBackend]
     search_fields = ["id_materia_prima__nombre"]
     filterset_fields = ["id_materia_prima", "id_estado_lote_materia_prima", "fecha_vencimiento"]
+
+
+ # --- MÉTODO AÑADIDO ---
+    def perform_create(self, serializer):
+        """
+        Guarda el nuevo lote de materia prima y luego verifica si alguna orden 
+        en espera puede ser procesada con este nuevo stock.
+        """
+        # 1. Guarda el nuevo lote como siempre
+        nuevo_lote = serializer.save()
+        print(f"Se ha creado un nuevo lote de {nuevo_lote.id_materia_prima.nombre} con cantidad {nuevo_lote.cantidad}.")
+
+        # 2. Llama al servicio para que revise las órdenes pendientes
+        procesar_ordenes_en_espera(nuevo_lote.id_materia_prima)
+
+
 
 class LoteProduccionMateriaViewSet(viewsets.ModelViewSet):
     queryset = LoteProduccionMateria.objects.all()

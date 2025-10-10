@@ -31,6 +31,7 @@ class OrdenVenta(models.Model):
     id_estado_venta = models.ForeignKey(EstadoVenta, on_delete=models.CASCADE, db_column="id_estado_venta")
     id_prioridad = models.ForeignKey(Prioridad, on_delete=models.CASCADE, db_column="id_prioridad")
     fecha_entrega = models.DateTimeField(null=True, blank=True)
+    fecha_estimada = models.DateField(null=True, blank=True)
 
 
     class Meta:
