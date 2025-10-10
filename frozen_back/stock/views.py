@@ -1,3 +1,5 @@
+import json
+from django.http import JsonResponse
 from django.shortcuts import render
 from stock.models import LoteProduccion
 from rest_framework import viewsets, filters
@@ -6,6 +8,7 @@ from rest_framework import status
 from rest_framework.decorators import api_view  # <- IMPORT IMPORTANTE
 from django_filters.rest_framework import DjangoFilterBackend
 from stock.services import cantidad_total_disponible_producto,  verificar_stock_y_enviar_alerta
+from django.views.decorators.csrf import csrf_exempt
 
 
 from django_filters.rest_framework import DjangoFilterBackend
@@ -93,3 +96,89 @@ def verificar_stock_view(request, id_producto):
     resultado = verificar_stock_y_enviar_alerta(id_producto, email)
     status_code = status.HTTP_200_OK if "error" not in resultado else status.HTTP_404_NOT_FOUND
     return Response(resultado, status=status_code)
+
+@csrf_exempt
+def agregar_o_crear_lote(request):
+    """
+    Agrega cantidad a un lote existente o crea uno nuevo si no existe.
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "Método no permitido"}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        id_materia_prima = data.get("id_materia_prima")
+        cantidad = data.get("cantidad")
+
+        if not id_materia_prima or not cantidad:
+            return JsonResponse({"error": "Faltan parámetros (id_materia_prima, cantidad)"}, status=400)
+
+        # Buscar un lote existente
+        lote = LoteMateriaPrima.objects.filter(id_materia_prima_id=id_materia_prima).first()
+
+        if lote:
+            lote.cantidad += cantidad
+            lote.save()
+            return JsonResponse({
+                "mensaje": "Cantidad agregada al lote existente",
+                "id_lote_materia_prima": lote.id_lote_materia_prima,
+                "nueva_cantidad": lote.cantidad
+            })
+
+        # Buscar o crear estado "Disponible"
+        estado, _ = EstadoLoteMateriaPrima.objects.get_or_create(descripcion__iexact="Disponible",
+                                                                 defaults={"descripcion": "Disponible"})
+
+        # Crear nuevo lote
+        nuevo_lote = LoteMateriaPrima.objects.create(
+            id_materia_prima_id=id_materia_prima,
+            fecha_vencimiento=None,
+            cantidad=cantidad,
+            id_estado_lote_materia_prima=estado
+        )
+
+        return JsonResponse({
+            "mensaje": "Nuevo lote creado",
+            "id_lote_materia_prima": nuevo_lote.id_lote_materia_prima,
+            "cantidad": nuevo_lote.cantidad
+        })
+
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+def restar_cantidad_lote(request):
+    """
+    Resta una cantidad de materia prima de un lote existente.
+    Si no hay suficiente cantidad, devuelve un error.
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "Método no permitido"}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        id_materia_prima = data.get("id_materia_prima")
+        cantidad = data.get("cantidad")
+
+        if not id_materia_prima or not cantidad:
+            return JsonResponse({"error": "Faltan parámetros (id_materia_prima, cantidad)"}, status=400)
+
+        lote = LoteMateriaPrima.objects.filter(id_materia_prima_id=id_materia_prima).first()
+        if not lote:
+            return JsonResponse({"error": "No existe un lote para esa materia prima"}, status=404)
+
+        if lote.cantidad < cantidad:
+            return JsonResponse({"error": "Stock insuficiente en el lote"}, status=400)
+
+        lote.cantidad -= cantidad
+        lote.save()
+
+        return JsonResponse({
+            "mensaje": "Cantidad restada del lote",
+            "id_lote_materia_prima": lote.id_lote_materia_prima,
+            "cantidad_actual": lote.cantidad
+        })
+
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)

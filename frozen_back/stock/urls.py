@@ -6,7 +6,9 @@ from .views import (
     LoteProduccionViewSet,
     LoteMateriaPrimaViewSet,
     LoteProduccionMateriaViewSet,
+    agregar_o_crear_lote,
     cantidad_total_producto_view,
+    restar_cantidad_lote,
     verificar_stock_view
 )
 
@@ -22,4 +24,7 @@ urlpatterns = [
     path('', include(router.urls)),
     path('cantidad-disponible/<int:id_producto>/', cantidad_total_producto_view),
     path('verificar-stock/<int:id_producto>/', verificar_stock_view),
+    path("materias_primas/agregar/", agregar_o_crear_lote, name="agregar_o_crear_lote"),
+    path("materias_primas/restar/", restar_cantidad_lote, name="restar_cantidad_lote"),
+
 ]
