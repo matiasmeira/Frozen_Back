@@ -50,21 +50,9 @@ class OrdenVentaProducto(models.Model):
 
 # lo que sigue es para las facturas, no es necesario el crud por el momento
 
-class Empresa(models.Model):
-    id_empresa = models.AutoField(primary_key=True)
-    nombre = models.CharField(max_length=100)
-    cuit = models.CharField(max_length=20, unique=True)
-    direccion = models.CharField(max_length=150, null=True, blank=True)
-    telefono = models.CharField(max_length=30, null=True, blank=True)
-    mail = models.CharField(max_length=100, null=True, blank=True)
-
-    class Meta:
-        db_table = "empresa"
-
 class Factura(models.Model):
     id_factura = models.AutoField(primary_key=True)
     id_orden_venta = models.OneToOneField(OrdenVenta, on_delete=models.CASCADE, db_column="id_orden_venta")
-    id_empresa = models.ForeignKey(Empresa, on_delete=models.CASCADE, db_column="id_empresa")
 
     class Meta:
         db_table = "factura"
