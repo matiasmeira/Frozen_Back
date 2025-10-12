@@ -1,6 +1,7 @@
 import json
 from django.http import JsonResponse
 from django.shortcuts import render
+from materias_primas.models import MateriaPrima
 from stock.models import LoteProduccion
 from rest_framework import viewsets, filters
 from rest_framework.response import Response
@@ -84,6 +85,17 @@ class LoteProduccionMateriaViewSet(viewsets.ModelViewSet):
 
 @api_view(["GET"])
 def cantidad_total_producto_view(request, id_producto):
+    """
+    Endpoint que devuelve la cantidad total disponible de un producto.
+    """
+    total = get_stock_disponible_para_producto(id_producto)
+    return Response(
+        {"id_producto": id_producto, "cantidad_disponible": total},
+        status=status.HTTP_200_OK
+    )
+
+@api_view(["GET"])
+def cantidad_total_materia_view(request, id_producto):
     """
     Endpoint que devuelve la cantidad total disponible de un producto.
     """
@@ -201,3 +213,37 @@ def restar_cantidad_lote(request):
 
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
+
+#METODO TEMPORAL PARA EL FRONT
+def listar_materias_primas(request):
+    if request.method != "GET":
+        return JsonResponse({"error": "Método no permitido"}, status=405)
+
+    # buscamos el estado "Disponible"
+    try:
+        estado_disponible = EstadoLoteMateriaPrima.objects.get(descripcion__iexact="disponible")
+    except EstadoLoteMateriaPrima.DoesNotExist:
+        return JsonResponse({"error": "No existe el estado 'Disponible' en la tabla estado_lote_materia_prima"}, status=500)
+
+    materias = MateriaPrima.objects.all()
+    data = []
+
+    for materia in materias:
+        # sumamos solo los lotes disponibles
+        total = (
+            LoteMateriaPrima.objects
+            .filter(
+                id_materia_prima=materia.id_materia_prima,
+                id_estado_lote_materia_prima=estado_disponible.id_estado_lote_materia_prima
+            )
+            .aggregate(total=sum('cantidad'))['total']
+        )
+
+        data.append({
+            "id_materia_prima": materia.id_materia_prima,
+            "nombre": materia.nombre,
+            "unidad_medida": materia.unidad_medida,
+            "cantidad_disponible": total or 0
+        })
+
+    return JsonResponse(data, safe=False)
