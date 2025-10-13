@@ -151,6 +151,7 @@ def agregar_o_crear_lote(request):
         if lote:
             lote.cantidad += cantidad
             lote.save()
+            procesar_ordenes_en_espera(id_materia_prima)
             return JsonResponse({
                 "mensaje": "Cantidad agregada al lote existente",
                 "id_lote_materia_prima": lote.id_lote_materia_prima,
