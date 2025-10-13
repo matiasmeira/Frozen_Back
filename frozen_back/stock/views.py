@@ -168,6 +168,7 @@ def agregar_o_crear_lote(request):
             cantidad=cantidad,
             id_estado_lote_materia_prima=estado
         )
+        procesar_ordenes_en_espera(id_materia_prima)
 
         return JsonResponse({
             "mensaje": "Nuevo lote creado",
