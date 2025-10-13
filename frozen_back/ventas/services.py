@@ -268,19 +268,36 @@ def cancelar_orden_venta(orden_venta):
     estado_activa, _ = EstadoReserva.objects.get_or_create(descripcion="Activa")
     estado_cancelada, _ = EstadoReserva.objects.get_or_create(descripcion="Cancelada")
 
+    # --- CAMBIO CLAVE 1: Obtenemos los productos afectados ANTES de cancelar ---
+    # Necesitamos saber qué productos se liberaron para poder re-evaluar otras órdenes.
+    reservas_a_cancelar = ReservaStock.objects.filter(
+        id_orden_venta_producto__id_orden_venta=orden_venta,
+        id_estado_reserva=estado_activa
+    )
+    productos_liberados = set(
+        reserva.id_orden_venta_producto.id_producto for reserva in reservas_a_cancelar.select_related('id_orden_venta_producto__id_producto')
+    )
+
+    # Cancelamos las reservas activas
+    reservas_a_cancelar.update(id_estado_reserva=estado_cancelada)
+   
+    """
     # --- CAMBIO CLAVE: En lugar de borrar, cancelamos las reservas activas ---
     ReservaStock.objects.filter(
         id_orden_venta_producto__id_orden_venta=orden_venta,
         id_estado_reserva=estado_activa
     ).update(id_estado_reserva=estado_cancelada)
-    
+    """
+
     # Actualizar el estado de la orden
     estado_orden_cancelada, _ = EstadoVenta.objects.get_or_create(descripcion__iexact="Cancelada")
     orden_venta.id_estado_venta = estado_orden_cancelada
     orden_venta.save()
     print(f"Orden #{orden_venta.pk} cancelada y stock liberado.")
 
-
+    # --- CAMBIO CLAVE 2: Disparamos la re-evaluación para cada producto liberado ---
+    for producto in productos_liberados:
+        revisar_ordenes_de_venta_pendientes(producto)
 
 
 
@@ -309,7 +326,7 @@ def revisar_ordenes_de_venta_pendientes(producto: Producto):
     ordenes_a_revisar = OrdenVenta.objects.filter(
         id_estado_venta=estado_en_preparacion,
         ordenventaproducto__id_producto=producto
-    ).distinct()
+    ).distinct().order_by('fecha_entrega')
 
     if not ordenes_a_revisar.exists():
         print("No se encontraron órdenes de venta pendientes para este producto.")

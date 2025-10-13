@@ -10,7 +10,7 @@ from django.conf import settings
 from stock.models import LoteProduccion  # según tu estructura
 from django.db import models
 from rest_framework import status
-from .services import gestionar_stock_y_estado_para_orden_venta, cancelar_orden_venta, facturar_orden_y_descontar_stock 
+from .services import gestionar_stock_y_estado_para_orden_venta, cancelar_orden_venta, facturar_orden_y_descontar_stock,  revisar_ordenes_de_venta_pendientes
 from .models import Factura, OrdenVenta
 from django.db import transaction
 from .filters import OrdenVentaFilter
@@ -190,37 +190,71 @@ def detalle_orden_venta(request, orden_id):
 
 
 
-
 @csrf_exempt
 def actualizar_orden_venta(request):
-    print("Llegó a la función actualizar_orden_venta")
     if request.method == "PUT":
-        breakpoint() 
         try:
             data = json.loads(request.body)
-
-            # --- LÍNEAS FALTANTES AÑADIDAS AQUÍ ---
             id_orden_venta = data.get("id_orden_venta")
             if not id_orden_venta:
                 return JsonResponse({"error": "El campo 'id_orden_venta' es obligatorio"}, status=400)
-            # --- FIN DE LA CORRECCIÓN ---
 
             with transaction.atomic():
-                # Ahora 'id_orden_venta' ya existe y se puede usar aquí
                 ordenVenta = OrdenVenta.objects.get(pk=id_orden_venta)
                 
-                # ... (el resto de tu código para actualizar, eliminar y crear productos)
+                # --- INICIO DE LA MODIFICACIÓN ---
+
+                # 1. Obtenemos los IDs de los productos afectados ANTES de cualquier cambio.
+                productos_afectados_antes = set(
+                    OrdenVentaProducto.objects.filter(id_orden_venta=ordenVenta).values_list('id_producto_id', flat=True)
+                )
+
+                # 2. Actualizamos la cabecera de la orden
+                if "fecha_entrega" in data:
+                    ordenVenta.fecha_entrega = data.get("fecha_entrega")
+                if "id_prioridad" in data:
+                    ordenVenta.id_prioridad_id = data.get("id_prioridad")
+                ordenVenta.save()
+
+                # 3. Eliminamos los productos antiguos (liberando sus reservas)
+                OrdenVentaProducto.objects.filter(id_orden_venta=ordenVenta).delete()
+
+                # 4. Insertamos los nuevos productos
+                productos_nuevos = data.get("productos", [])
+                productos_afectados_despues = set()
+                for p in productos_nuevos:
+                    producto_id = p["id_producto"]
+                    OrdenVentaProducto.objects.create(
+                        id_orden_venta=ordenVenta,
+                        id_producto_id=producto_id,
+                        cantidad=p["cantidad"]
+                    )
+                    productos_afectados_despues.add(producto_id)
                 
-                # Volvemos a ejecutar el servicio para que re-evalue todo
+                # 5. Volvemos a ejecutar el servicio de gestión sobre la orden modificada
                 gestionar_stock_y_estado_para_orden_venta(ordenVenta)
 
-            # Armar la respuesta
+                # 6. Combinamos todos los productos afectados (los que estaban y los nuevos)
+                todos_los_productos_afectados = productos_afectados_antes.union(productos_afectados_despues)
+
+            # 7. (Fuera de la transacción) Disparamos la re-evaluación para otras órdenes
+            print("Disparando re-evaluación de órdenes pendientes tras la edición...")
+            for producto_id in todos_los_productos_afectados:
+                from productos.models import Producto
+                producto = Producto.objects.get(pk=producto_id)
+                revisar_ordenes_de_venta_pendientes(producto)
+
+            # --- FIN DE LA MODIFICACIÓN ---
+
+            # Armar la respuesta final
             serializer = OrdenVentaSerializer(ordenVenta)
             return JsonResponse(serializer.data, status=200)
 
         except OrdenVenta.DoesNotExist:
             return JsonResponse({"error": "Orden de venta no encontrada"}, status=404)
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return JsonResponse({"error": str(e)}, status=400)
 
     return JsonResponse({"error": "Método no permitido"}, status=405)
