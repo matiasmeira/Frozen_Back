@@ -111,12 +111,6 @@ def gestionar_reservas_para_orden_produccion(orden):
     estado_activa, _ = EstadoReservaMateria.objects.get_or_create(descripcion="Activa")
     estado_cancelada, _ = EstadoReservaMateria.objects.get_or_create(descripcion="Cancelada")
 
-    # Aseguramos que las descripciones estén bien guardadas
-    estado_activa.descripcion = "Activa"
-    estado_activa.save()
-    estado_cancelada.descripcion = "Cancelada"
-    estado_cancelada.save()
-
     # Cancelar reservas anteriores activas
     ReservaMateriaPrima.objects.filter(
         id_orden_produccion=orden,
