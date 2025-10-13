@@ -224,7 +224,7 @@ def listar_materias_primas(request):
     if request.method != "GET":
         return JsonResponse({"error": "Método no permitido"}, status=405)
 
-    # buscamos el estado "Disponible"
+    # Buscamos el estado "Disponible"
     try:
         estado_disponible = EstadoLoteMateriaPrima.objects.get(descripcion__iexact="disponible")
     except EstadoLoteMateriaPrima.DoesNotExist:
@@ -234,21 +234,22 @@ def listar_materias_primas(request):
     data = []
 
     for materia in materias:
-        # sumamos solo los lotes disponibles
-        total = (
-            LoteMateriaPrima.objects
-            .filter(
-                id_materia_prima=materia.id_materia_prima,
-                id_estado_lote_materia_prima=estado_disponible.id_estado_lote_materia_prima
-            )
-            .aggregate(total=Sum('cantidad'))['total']
+        # Obtenemos todos los lotes disponibles para esta materia prima
+        lotes_disponibles = LoteMateriaPrima.objects.filter(
+            id_materia_prima=materia.id_materia_prima,
+            id_estado_lote_materia_prima=estado_disponible.id_estado_lote_materia_prima
         )
+        
+        # Calculamos la suma de cantidad_disponible para todos los lotes
+        cantidad_disponible_total = 0
+        for lote in lotes_disponibles:
+            cantidad_disponible_total += lote.cantidad_disponible
 
         data.append({
             "id_materia_prima": materia.id_materia_prima,
             "nombre": materia.nombre,
             "unidad_medida": materia.id_unidad.descripcion,
-            "cantidad_disponible": total or 0
+            "cantidad_disponible": max(cantidad_disponible_total, 0)  # Evitamos valores negativos
         })
 
     return JsonResponse(data, safe=False)
