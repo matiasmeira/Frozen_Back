@@ -104,9 +104,10 @@ class OrdenProduccionViewSet(viewsets.ModelViewSet):
     def actualizar_estado(self, request, pk=None):
         """
         Actualiza el estado de la orden de producción.
-        🔹 Si pasa a 'Finalizada' → descuenta stock reservado y marca el lote como disponible.
-        🔹 Si pasa a 'Cancelada' → no descuenta stock, solo cambia el estado del lote.
-        🔹 Si pasa a 'Pendiente de inicio' → pone el lote en 'En espera'.
+
+        🔹 'Finalizada' → descuenta stock reservado y marca el lote como disponible.
+        🔹 'Cancelada' → no descuenta stock, cambia el lote a cancelado y libera el stock reservado.
+        🔹 'Pendiente de inicio' → pone el lote en 'En espera'.
         """
         try:
             orden = self.get_object()
@@ -132,28 +133,26 @@ class OrdenProduccionViewSet(viewsets.ModelViewSet):
         orden.id_estado_orden_produccion = nuevo_estado
         orden.save()
 
-        # --- 🔹 Caso 1: Orden FINALIZADA ---
+        # --- 🔹 CASO 1: ORDEN FINALIZADA ---
         if estado_descripcion == 'finalizada':
-            # Consumir la materia prima
             try:
+                # Descontar definitivamente el stock reservado
                 descontar_stock_reservado(orden)
             except Exception as e:
                 return Response(
-                    {'error': f'Error al descontar stock: {str(e)}'},
+                    {'error': f'Error al descontar stock reservado: {str(e)}'},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
 
-            # Marcar el lote como disponible
+            # Marcar el lote de producción como "Disponible"
             if orden.id_lote_produccion:
                 try:
-                    estado_disponible = EstadoLoteProduccion.objects.get(
-                        descripcion__iexact="Disponible"
-                    )
+                    estado_disponible = EstadoLoteProduccion.objects.get(descripcion__iexact="Disponible")
                     lote = orden.id_lote_produccion
                     lote.id_estado_lote_produccion = estado_disponible
                     lote.save()
 
-                    # Revisar órdenes de venta pendientes del producto fabricado
+                    # Revisar órdenes de venta pendientes
                     if lote.id_producto:
                         revisar_ordenes_de_venta_pendientes(lote.id_producto)
 
@@ -163,15 +162,12 @@ class OrdenProduccionViewSet(viewsets.ModelViewSet):
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR
                     )
 
-        # --- 🔹 Caso 2: Orden CANCELADA ---
-        elif estado_descripcion.lower() == 'cancelada':
-    # NO se descuenta stock
-    # Actualizar el lote asociado
+        # --- 🔹 CASO 2: ORDEN CANCELADA ---
+        elif estado_descripcion == 'cancelada':
+            # No se descuenta stock, solo se libera
             if orden.id_lote_produccion:
                 try:
-                    estado_cancelado = EstadoLoteProduccion.objects.get(
-                        descripcion__iexact="Cancelado"
-                    )
+                    estado_cancelado = EstadoLoteProduccion.objects.get(descripcion__iexact="Cancelado")
                     lote = orden.id_lote_produccion
                     lote.id_estado_lote_produccion = estado_cancelado
                     lote.save()
@@ -181,26 +177,40 @@ class OrdenProduccionViewSet(viewsets.ModelViewSet):
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR
                     )
 
-            # Liberar reservas de materia prima
+            # Liberar reservas y devolver stock reservado
             try:
                 estado_activa = EstadoReservaMateria.objects.get(descripcion__iexact="Activa")
                 estado_cancelada_reserva, _ = EstadoReservaMateria.objects.get_or_create(descripcion__iexact="Cancelada")
+
                 reservas = ReservaMateriaPrima.objects.filter(
                     id_orden_produccion=orden,
                     id_estado_reserva_materia=estado_activa
                 )
-                reservas.update(id_estado_reserva_materia=estado_cancelada_reserva)
+
+                for reserva in reservas:
+                    lote_mp = reserva.id_lote_materia_prima
+
+                    # Devolver la cantidad reservada al lote
+                    lote_mp.cantidad_disponible += reserva.cantidad_reservada
+                    lote_mp.save()
+
+                    # Marcar la reserva como cancelada
+                    reserva.id_estado_reserva_materia = estado_cancelada_reserva
+                    reserva.save()
+
             except EstadoReservaMateria.DoesNotExist:
-                print("No se encontró el estado 'Activa' en ReservaMateriaPrima")
+                print("⚠️ No se encontró el estado 'Activa' en ReservaMateriaPrima")
+            except Exception as e:
+                return Response(
+                    {'error': f'Error al liberar reservas: {str(e)}'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
 
-
-        # --- 🔹 Caso 3: Orden Pendiente de inicio ---
+        # --- 🔹 CASO 3: ORDEN PENDIENTE DE INICIO ---
         elif estado_descripcion == 'pendiente de inicio':
             if orden.id_lote_produccion:
                 try:
-                    estado_espera = EstadoLoteProduccion.objects.get(
-                        descripcion__iexact="En espera"
-                    )
+                    estado_espera = EstadoLoteProduccion.objects.get(descripcion__iexact="En espera")
                     lote = orden.id_lote_produccion
                     lote.id_estado_lote_produccion = estado_espera
                     lote.save()
@@ -210,16 +220,17 @@ class OrdenProduccionViewSet(viewsets.ModelViewSet):
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR
                     )
 
-        # --- 🔹 Otros estados ---
+        # --- 🔹 OTROS ESTADOS ---
         else:
             print(f"Estado '{estado_descripcion}' no requiere acción especial.")
 
-        # Devolver la orden actualizada
+        # Serializar y devolver respuesta
         response_serializer = OrdenProduccionSerializer(orden)
         return Response({
             'message': f'Estado de la orden actualizado a \"{nuevo_estado.descripcion}\"',
             'orden': response_serializer.data
         }, status=status.HTTP_200_OK)
+
 
 
 
