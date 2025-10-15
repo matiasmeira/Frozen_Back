@@ -12,6 +12,7 @@ router.register(r'estados', EstadoOrdenProduccionViewSet)
 router.register(r'lineas', LineaProduccionViewSet)
 router.register(r'ordenes', OrdenProduccionViewSet)
 router.register(r'noconformidades', NoConformidadViewSet)
+router.register(r'estado_linea_produccion', LineaProduccionViewSet)  
 
 urlpatterns = [
     path('', include(router.urls)),

@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import EstadoOrdenProduccion, LineaProduccion, OrdenProduccion, NoConformidad
+from .models import EstadoOrdenProduccion, LineaProduccion, OrdenProduccion, NoConformidad, estado_linea_produccion
 from empleados.models import Empleado
 from productos.models import Producto
 from stock.models import LoteProduccion, EstadoLoteProduccion
@@ -15,6 +15,11 @@ class EstadoOrdenProduccionSerializer(serializers.ModelSerializer):
 class LineaProduccionSerializer(serializers.ModelSerializer):
     class Meta:
         model = LineaProduccion
+        fields = '__all__'
+
+class EstadoLineaProduccionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = estado_linea_produccion
         fields = '__all__'
 
 class EmpleadoSerializer(serializers.ModelSerializer):
