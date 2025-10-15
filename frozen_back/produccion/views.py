@@ -6,7 +6,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from django.db import transaction
 from produccion.services import gestionar_reservas_para_orden_produccion, descontar_stock_reservado
 from recetas.models import Receta, RecetaMateriaPrima
-from .models import EstadoOrdenProduccion, LineaProduccion, OrdenProduccion, NoConformidad
+from .models import EstadoOrdenProduccion, LineaProduccion, OrdenProduccion, NoConformidad, estado_linea_produccion
 from stock.models import EstadoLoteMateriaPrima, LoteMateriaPrima, LoteProduccion, EstadoLoteProduccion, LoteProduccionMateria
 from .serializers import (
     EstadoOrdenProduccionSerializer,
@@ -32,6 +32,10 @@ class EstadoOrdenProduccionViewSet(viewsets.ModelViewSet):
 class LineaProduccionViewSet(viewsets.ModelViewSet):
     queryset = LineaProduccion.objects.all()
     serializer_class = LineaProduccionSerializer
+
+class EstadoLineaProduccionViewSet(viewsets.ModelViewSet):
+    queryset = estado_linea_produccion.objects.all()
+    serializer_class = EstadoOrdenProduccionSerializer
 
 
 # ------------------------------
