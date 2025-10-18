@@ -1,4 +1,5 @@
 from django.db import models
+from produccion.models import orden_produccion
 
 class estado_orden_compra(models.Model):
     id_estado_orden_compra = models.AutoField(primary_key=True)
@@ -26,3 +27,11 @@ class orden_compra_materia_prima(models.Model):
 
     class Meta:
         db_table = "orden_compra_materia_prima"
+
+class orden_compra_produccion(models.Model):
+    id_orden_compra_produccion = models.AutoField(primary_key=True)
+    id_orden_compra = models.ForeignKey(orden_compra, on_delete=models.CASCADE, db_column="id_orden_compra")
+    id_orden_produccion = models.ForeignKey(orden_produccion, on_delete=models.CASCADE, db_column="id_orden_produccion")
+
+    class Meta:
+        db_table = "orden_compra_produccion"
