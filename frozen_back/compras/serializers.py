@@ -1,10 +1,10 @@
 from rest_framework import serializers
-from .models import orden_compra, estado_orden_compra, orden_compra_materia_prima, orden_compra_produccion
+from .models import OrdenCompra, EstadoOrdenCompra, OrdenCompraMateriaPrima, OrdenCompraProduccion
 from materias_primas.models import Proveedor
 
 class estadoOrdenCompraSerializer(serializers.ModelSerializer):
     class Meta:
-        model = estado_orden_compra
+        model = EstadoOrdenCompra
         fields = "__all__"
 
 
@@ -13,7 +13,7 @@ class ordenCompraSerializer(serializers.ModelSerializer):
     proveedor_nombre = serializers.CharField(source='id_proveedor.nombre', read_only=True)
 
     class Meta:
-        model = orden_compra
+        model = OrdenCompra
         fields = [
             "__all__"
         ]
@@ -23,7 +23,7 @@ class ordenCompraMateriaPrimaSerializer(serializers.ModelSerializer):
     materia_prima_nombre = serializers.CharField(source='id_materia_prima.nombre', read_only=True)
 
     class Meta:
-        model = orden_compra_materia_prima
+        model = OrdenCompraMateriaPrima
         fields = [
             "__all__"
         ]
@@ -32,7 +32,7 @@ class ordenCompraProduccionSerializer(serializers.ModelSerializer):
     orden_produccion_detalle = serializers.CharField(source='id_orden_produccion.detalle', read_only=True)
 
     class Meta:
-        model = orden_compra_produccion
+        model = OrdenCompraProduccion
         fields = [
             "__all__"
         ]

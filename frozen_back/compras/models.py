@@ -1,16 +1,16 @@
 from django.db import models
-from produccion.models import orden_produccion
+from produccion.models import OrdenProduccion
 
-class estado_orden_compra(models.Model):
+class EstadoOrdenCompra(models.Model):
     id_estado_orden_compra = models.AutoField(primary_key=True)
     descripcion = models.CharField(max_length=50)
 
     class Meta:
         db_table = "estado_orden_compra"
 
-class orden_compra(models.Model):
+class OrdenCompra(models.Model):
     id_orden_compra = models.AutoField(primary_key=True)
-    id_estado_orden_compra = models.ForeignKey(estado_orden_compra, on_delete=models.CASCADE, db_column="id_estado_orden_compra")
+    id_estado_orden_compra = models.ForeignKey(EstadoOrdenCompra, on_delete=models.CASCADE, db_column="id_estado_orden_compra")
     id_proveedor = models.ForeignKey('materias_primas.Proveedor', on_delete=models.CASCADE, db_column="id_proveedor")
     fecha_solicitud = models.DateField()
     fecha_entrega_estimada = models.DateField()
@@ -19,19 +19,19 @@ class orden_compra(models.Model):
     class Meta:
         db_table = "orden_compra"
 
-class orden_compra_materia_prima(models.Model):
+class OrdenCompraMateriaPrima(models.Model):
     id_orden_compra_materia_prima = models.AutoField(primary_key=True)
-    id_orden_compra = models.ForeignKey(orden_compra, on_delete=models.CASCADE, db_column="id_orden_compra")
+    id_orden_compra = models.ForeignKey(OrdenCompra, on_delete=models.CASCADE, db_column="id_orden_compra")
     id_materia_prima = models.ForeignKey('materias_primas.MateriaPrima', on_delete=models.CASCADE, db_column="id_materia_prima")
     cantidad = models.IntegerField()
 
     class Meta:
         db_table = "orden_compra_materia_prima"
 
-class orden_compra_produccion(models.Model):
+class OrdenCompraProduccion(models.Model):
     id_orden_compra_produccion = models.AutoField(primary_key=True)
-    id_orden_compra = models.ForeignKey(orden_compra, on_delete=models.CASCADE, db_column="id_orden_compra")
-    id_orden_produccion = models.ForeignKey(orden_produccion, on_delete=models.CASCADE, db_column="id_orden_produccion")
+    id_orden_compra = models.ForeignKey(OrdenCompra, on_delete=models.CASCADE, db_column="id_orden_compra")
+    id_orden_produccion = models.ForeignKey(OrdenProduccion, on_delete=models.CASCADE, db_column="id_orden_produccion")
 
     class Meta:
         db_table = "orden_compra_produccion"
