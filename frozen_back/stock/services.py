@@ -1,7 +1,8 @@
 from django.db import models, transaction
 from django.core.mail import send_mail
 from productos.models import Producto
-from .models import LoteProduccion, EstadoLoteProduccion
+from .models import LoteProduccion, EstadoLoteProduccion, LoteMateriaPrima, EstadoLoteMateriaPrima, ReservaMateriaPrima, EstadoReservaMateria
+from materias_primas.models import MateriaPrima
 from django.db.models import Sum, F, Q
 from django.db.models.functions import Coalesce
 from django.conf import settings
@@ -250,3 +251,80 @@ def _enviar_telegram_async(mensaje):
 
     # Ejecutar el envío en un hilo separado
     threading.Thread(target=send_request).start()
+
+
+
+
+
+
+
+
+
+# --- INICIO DE NUEVAS FUNCIONES PARA MATERIA PRIMA ---
+
+def get_stock_disponible_para_materia_prima(id_materia_prima):
+    """
+    Devuelve la cantidad total DISPONIBLE de una materia prima.
+    Calcula el total reservado para cada lote sumando ÚNICAMENTE las reservas 'Activas'.
+    """
+    
+    # 1. Filtro para reservas activas (materias primas)
+    filtro_reservas_activas = Q(reservas__id_estado_reserva_materia__descripcion='Activa')
+
+    # 2. Anotamos cada lote de MP con la suma de sus reservas activas.
+    lotes_con_reservas = LoteMateriaPrima.objects.filter(
+        id_materia_prima_id=id_materia_prima,
+        id_estado_lote_materia_prima__descripcion="Disponible"
+    ).annotate(
+        total_reservado=Coalesce(Sum('reservas__cantidad_reservada', filter=filtro_reservas_activas), 0)
+    )
+
+    # 3. Anotamos la cantidad disponible para cada lote (stock físico - reservado).
+    lotes_con_disponible = lotes_con_reservas.annotate(
+        disponible=F('cantidad') - F('total_reservado')
+    )
+
+    # 4. Finalmente, sumamos el total de las cantidades disponibles de todos los lotes.
+    resultado_agregado = lotes_con_disponible.aggregate(
+        total=Sum('disponible')
+    )
+
+    total_disponible = resultado_agregado.get('total') or 0
+
+    return total_disponible
+
+
+def verificar_stock_mp_y_enviar_alerta(id_materia_prima):
+    """
+    Verifica el stock de una materia prima contra su umbral mínimo
+    y envía una alerta por Telegram si está por debajo.
+    """
+    try:
+        materia_prima = MateriaPrima.objects.get(pk=id_materia_prima)
+    except MateriaPrima.DoesNotExist:
+        print(f"Error: La materia prima con ID {id_materia_prima} no existe.")
+        return
+
+    total_disponible = get_stock_disponible_para_materia_prima(id_materia_prima)
+    umbral = materia_prima.umbral_minimo
+    
+    print(f"Verificando stock MP {materia_prima.nombre}: Disponible={total_disponible}, Umbral={umbral}")
+
+    if total_disponible < umbral:
+        # Formatear el mensaje para Telegram
+        asunto_email = f"⚠️ Alerta de stock bajo - {materia_prima.nombre}"
+        cuerpo_notificacion = (
+            f"*{asunto_email}*\n\n"  # Título en negrita para Telegram
+            f"Materia Prima: {materia_prima.nombre}\n"
+            f"Cantidad disponible: *{total_disponible}*\n"
+            f"Umbral mínimo: *{umbral}*\n\n"
+            "Por favor, contactar al proveedor o revisar compras."
+        )
+        
+        # Enviar mensaje de Telegram
+        _enviar_telegram_async(cuerpo_notificacion)
+        
+        print(f"¡ALERTA DE STOCK BAJO enviada para {materia_prima.nombre}!")
+
+# --- FIN DE NUEVAS FUNCIONES ---
+    

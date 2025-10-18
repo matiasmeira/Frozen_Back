@@ -12,10 +12,38 @@ class EstadoVenta(models.Model):
 class Cliente(models.Model):
     id_cliente = models.AutoField(primary_key=True)
     nombre = models.CharField(max_length=100)
+    apellido = models.CharField(max_length=100, null=True, blank=True)
     email = models.CharField(max_length=100, unique=True, null=True, blank=True)
+    cuil = models.CharField(max_length=100, unique=True, null=True, blank=True)
+    contraseña = models.CharField(
+        max_length=128, 
+        null=True, 
+        blank=True,
+        help_text="Campo para contraseña (almacenamiento inseguro)"
+    )
+
 
     class Meta:
         db_table = "cliente"
+
+
+
+class DireccionCliente(models.Model):
+    id_direccion_cliente = models.AutoField(primary_key=True)
+    id_cliente = models.ForeignKey(
+        Cliente,  # El modelo Cliente que definiste antes
+        on_delete=models.CASCADE,
+        db_column="id_cliente",
+        related_name="direcciones" # Permite hacer: mi_cliente.direcciones.all()
+    )
+    calle = models.CharField(max_length=200)
+    altura = models.CharField(max_length=50, help_text="Número de la casa, piso, dpto, etc.")
+    localidad = models.CharField(max_length=100, null=True, blank=True)
+    zona = models.CharField(max_length=10, null=True, blank=True
+    )
+    class Meta:
+        db_table = "direccion_cliente"
+
 
 class Prioridad(models.Model):
     id_prioridad = models.AutoField(primary_key=True)

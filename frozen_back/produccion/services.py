@@ -6,7 +6,7 @@ from stock.models import LoteMateriaPrima, EstadoLoteMateriaPrima, LoteProduccio
 from recetas.models import Receta, RecetaMateriaPrima
 from django.core.exceptions import ValidationError
 from recetas.models import Receta, RecetaMateriaPrima
-
+from stock.services import verificar_stock_mp_y_enviar_alerta
 
 @transaction.atomic
 def procesar_ordenes_en_espera(materia_prima_ingresada):
@@ -242,6 +242,8 @@ def descontar_stock_reservado(orden):
 
     print(f"🔹 Descontando stock de {reservas.count()} reservas para la Orden #{orden.id_orden_produccion}...")
 
+    materias_primas_afectadas = set()
+
     for reserva in reservas:
         lote = reserva.id_lote_materia_prima
         cantidad = reserva.cantidad_reservada
@@ -262,6 +264,8 @@ def descontar_stock_reservado(orden):
             lote.id_estado_lote_materia_prima = estado_agotado
         lote.save()
 
+        materias_primas_afectadas.add(lote.id_materia_prima.pk)
+
         # Registrar trazabilidad
         if orden.id_lote_produccion:
             LoteProduccionMateria.objects.create(
@@ -275,4 +279,9 @@ def descontar_stock_reservado(orden):
         reserva.save()
 
     print(f"✅ Stock descontado correctamente para la Orden #{orden.id_orden_produccion}")
+
+
+    print(f"Verificando umbrales de stock para {len(materias_primas_afectadas)} materias primas...")
+    for mp_id in materias_primas_afectadas:
+        verificar_stock_mp_y_enviar_alerta(mp_id)
 

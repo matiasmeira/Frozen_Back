@@ -52,7 +52,8 @@ INSTALLED_APPS = [
     'produccion',
     'stock',
     'recetas',
-    'compras'
+    'compras',
+    'trazabilidad',
 ]
 
 MIDDLEWARE = [
