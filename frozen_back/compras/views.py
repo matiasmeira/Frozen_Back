@@ -1,7 +1,9 @@
 from datetime import date, timedelta
 from rest_framework import viewsets, filters, status
 from rest_framework.response import Response
+from rest_framework.decorators import action
 from django_filters.rest_framework import DjangoFilterBackend
+from django.utils import timezone
 from django.db import transaction
 from compras.models import (
     EstadoOrdenCompra, OrdenCompra, OrdenCompraProduccion, OrdenCompraMateriaPrima
@@ -10,6 +12,7 @@ from compras.serializers import (
     estadoOrdenCompraSerializer, ordenCompraProduccionSerializer, ordenCompraSerializer
 )
 from materias_primas.models import Proveedor
+from .services import crear_lotes_materia_prima
 
 
 class ordenCompraViewSet(viewsets.ModelViewSet):
@@ -18,6 +21,75 @@ class ordenCompraViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
     filterset_fields = ["fecha_solicitud", "id_proveedor", "id_estado_orden_compra"]
     search_fields = ["id_proveedor__nombre"]
+
+    @action(detail=True, methods=['patch'])
+    @transaction.atomic
+    def actualizar_estado(self, request, pk=None):
+        """
+        Actualiza el estado de una orden de compra.
+        
+        Si el nuevo estado es 'Recibido':
+        - Requiere una lista de materias_recibidas en el body con la estructura:
+          [{"id_materia_prima": 1, "cantidad": 100}, ...]
+        - Crea los lotes de materia prima correspondientes
+        - Actualiza la fecha_entrega_real
+        
+        Si el estado es 'Cancelado':
+        - Simplemente actualiza el estado de la orden
+        """
+        try:
+            orden = self.get_object()
+            nuevo_estado_id = request.data.get('id_estado_orden_compra')
+            
+            if not nuevo_estado_id:
+                return Response(
+                    {"error": "Debe especificar id_estado_orden_compra"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            nuevo_estado = EstadoOrdenCompra.objects.get(id_estado_orden_compra=nuevo_estado_id)
+            descripcion_estado = nuevo_estado.descripcion.lower()
+            
+            # Actualizar el estado de la orden
+            orden.id_estado_orden_compra = nuevo_estado
+            
+            if descripcion_estado == 'recibido':
+                materias_recibidas = request.data.get('materias_recibidas')
+                
+                if not materias_recibidas:
+                    return Response(
+                        {"error": "Debe especificar las materias_recibidas"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                # Crear los lotes de materia prima
+                lotes_creados = crear_lotes_materia_prima(orden, materias_recibidas)
+                
+                # Actualizar fecha de entrega real
+                orden.fecha_entrega_real = timezone.now().date()
+            
+            orden.save()
+            
+            return Response({
+                "mensaje": f"Estado actualizado a {nuevo_estado.descripcion}",
+                "lotes_creados": len(lotes_creados) if descripcion_estado == 'recibido' else 0
+            })
+            
+        except EstadoOrdenCompra.DoesNotExist:
+            return Response(
+                {"error": "El estado especificado no existe"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except ValueError as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            return Response(
+                {"error": f"Error al actualizar el estado: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
