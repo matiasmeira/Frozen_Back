@@ -7,7 +7,7 @@ from django.db import transaction
 from produccion.services import gestionar_reservas_para_orden_produccion, descontar_stock_reservado
 from recetas.models import Receta, RecetaMateriaPrima
 from .models import EstadoOrdenProduccion, LineaProduccion, OrdenProduccion, NoConformidad, estado_linea_produccion
-from stock.models import EstadoLoteMateriaPrima, LoteMateriaPrima, LoteProduccion, EstadoLoteProduccion, LoteProduccionMateria
+from stock.models import EstadoLoteMateriaPrima, LoteMateriaPrima, LoteProduccion, EstadoLoteProduccion, LoteProduccionMateria, EstadoReservaMateria, ReservaMateriaPrima
 from .serializers import (
     EstadoOrdenProduccionSerializer,
     LineaProduccionSerializer,
@@ -168,7 +168,7 @@ class OrdenProduccionViewSet(viewsets.ModelViewSet):
                     )
 
         # --- 🔹 CASO 2: ORDEN CANCELADA ---
-        elif estado_descripcion == 'cancelada':
+        elif estado_descripcion == 'cancelado':
             # No se descuenta stock, solo se libera
             if orden.id_lote_produccion:
                 try:
@@ -196,8 +196,8 @@ class OrdenProduccionViewSet(viewsets.ModelViewSet):
                     lote_mp = reserva.id_lote_materia_prima
 
                     # Devolver la cantidad reservada al lote
-                    lote_mp.cantidad_disponible += reserva.cantidad_reservada
-                    lote_mp.save()
+                    #lote_mp.cantidad_disponible += reserva.cantidad_reservada
+                    #lote_mp.save()
 
                     # Marcar la reserva como cancelada
                     reserva.id_estado_reserva_materia = estado_cancelada_reserva
