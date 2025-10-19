@@ -48,7 +48,7 @@ class OrdenProduccionFilter(django_filters.FilterSet):
                 estado = EstadoOrdenProduccion.objects.get(pk=estado_id)
                 if estado.descripcion.lower() == 'en proceso':
                     # Ordenar por hora_inicio_produccion (ascendente)
-                    queryset = queryset.order_by('-hora_inicio_produccion')
+                    queryset = queryset.order_by('-fecha_inicio')
             except EstadoOrdenProduccion.DoesNotExist:
                 pass
 
