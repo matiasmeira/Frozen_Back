@@ -9,16 +9,19 @@ class EstadoVentaSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
-class ClienteSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Cliente
-        fields = '__all__'
-
-
 class PrioridadSerializer(serializers.ModelSerializer):
     class Meta:
         model = Prioridad
         fields = '__all__'
+
+
+
+class ClienteSerializer(serializers.ModelSerializer):
+    prioridad = PrioridadSerializer(source='id_prioridad', read_only=True)
+    class Meta:
+        model = Cliente
+        fields = '__all__'
+
 
 
 class OrdenVentaProductoSerializer(serializers.ModelSerializer):
@@ -73,6 +76,12 @@ class OrdenVentaSerializer(serializers.ModelSerializer):
         read_only=True
     )
 
+    # Propiedad para ver 'Empleado' u 'Online' en vez de 'EMP' u 'ONL'
+    tipo_venta_display = serializers.CharField(source='get_tipo_venta_display', read_only=True)
+    
+    # Propiedad para ver la dirección formateada
+    direccion_entrega_completa = serializers.CharField(read_only=True)
+
     class Meta:
         model = OrdenVenta
         fields = [
@@ -86,6 +95,13 @@ class OrdenVentaSerializer(serializers.ModelSerializer):
             "id_cliente",
             "id_estado_venta",
             "id_prioridad",
+            "tipo_venta",
+            "tipo_venta_display",
+            "calle",
+            "altura", 
+            "localidad",
+            "zona",
+            "direccion_entrega_completa"
         ]
 
     

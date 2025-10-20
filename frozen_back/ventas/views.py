@@ -198,6 +198,24 @@ def actualizar_orden_venta(request):
             id_orden_venta = data.get("id_orden_venta")
             if not id_orden_venta:
                 return JsonResponse({"error": "El campo 'id_orden_venta' es obligatorio"}, status=400)
+            
+            # --- INICIO DE VALIDACIÓN MANUAL ---
+            if "tipo_venta" in data:
+                tipo_venta_enviado = data.get("tipo_venta")
+                validos_tipo_venta = OrdenVenta.TipoVenta.values
+                if tipo_venta_enviado not in validos_tipo_venta:
+                    return JsonResponse({
+                        "error": f"El valor de 'tipo_venta' no es válido. Debe ser uno de: {validos_tipo_venta}"
+                    }, status=400)
+
+            if "zona" in data:
+                zona_enviada = data.get("zona")
+                validos_zona = OrdenVenta.TipoZona.values
+                if zona_enviada and zona_enviada not in validos_zona:
+                    return JsonResponse({
+                        "error": f"El valor de 'zona' no es válido. Debe ser uno de: {validos_zona}"
+                    }, status=400)
+            # --- FIN DE VALIDACIÓN MANUAL ---
 
             with transaction.atomic():
                 ordenVenta = OrdenVenta.objects.get(pk=id_orden_venta)
@@ -214,6 +232,17 @@ def actualizar_orden_venta(request):
                     ordenVenta.fecha_entrega = data.get("fecha_entrega")
                 if "id_prioridad" in data:
                     ordenVenta.id_prioridad_id = data.get("id_prioridad")
+                if "tipo_venta" in data:
+                    ordenVenta.tipo_venta = data.get("tipo_venta")
+                if "calle" in data:
+                    ordenVenta.calle=data.get("calle"),
+                if "altura" in data:
+                    ordenVenta.altura=data.get("altura"),
+                if "localidad" in data:
+                    ordenVenta.localidad=data.get("localidad"),
+                if "zona" in data:    
+                    ordenVenta.zona=data.get("zona")
+
                 ordenVenta.save()
 
                 # 3. Eliminamos los productos antiguos (liberando sus reservas)
@@ -324,13 +353,36 @@ def crear_orden_venta(request):
         try:
             data = json.loads(request.body)
             estado_creada = EstadoVenta.objects.get(descripcion__iexact="Creada")
+            
+            # --- INICIO DE VALIDACIÓN MANUAL ---
+            tipo_venta_enviado = data.get("tipo_venta")
+            zona_enviada = data.get("zona")
+            # 1. Validar tipo_venta
+            validos_tipo_venta = OrdenVenta.TipoVenta.values
+            if tipo_venta_enviado not in validos_tipo_venta:
+                return JsonResponse({
+                    "error": f"El valor de 'tipo_venta' no es válido. Debe ser uno de: {validos_tipo_venta}"
+                }, status=400)
 
+            # 2. Validar zona (solo si se envió)
+            validos_zona = OrdenVenta.TipoZona.values
+            if zona_enviada and zona_enviada not in validos_zona:
+                return JsonResponse({
+                    "error": f"El valor de 'zona' no es válido. Debe ser uno de: {validos_zona}"
+                }, status=400)
+            # --- FIN DE VALIDACIÓN MANUAL ---
+            
             with transaction.atomic(): # Envolvemos todo en una transacción
                 orden_venta = OrdenVenta.objects.create(
                     id_cliente_id=data.get("id_cliente"),
                     id_estado_venta=estado_creada,
                     id_prioridad_id=data.get("id_prioridad"),
-                    fecha_entrega=data.get("fecha_entrega")
+                    fecha_entrega=data.get("fecha_entrega"),
+                    tipo_venta=data.get("tipo_venta"),
+                    calle=data.get("calle"),
+                    altura=data.get("altura"),
+                    localidad=data.get("localidad"),
+                    zona=data.get("zona")
                 )
 
                 productos = data.get("productos", [])
