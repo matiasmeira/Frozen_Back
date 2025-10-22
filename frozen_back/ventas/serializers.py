@@ -2,6 +2,8 @@ from rest_framework import serializers
 from .models import EstadoVenta, Cliente, OrdenVenta, OrdenVentaProducto, Prioridad
 from productos.serializers import ProductoSerializer
 from productos.models import Producto
+from empleados.models import Empleado
+
 
 class EstadoVentaSerializer(serializers.ModelSerializer):
     class Meta:
@@ -69,6 +71,13 @@ class OrdenVentaSerializer(serializers.ModelSerializer):
     id_prioridad = serializers.PrimaryKeyRelatedField(
         queryset=Prioridad.objects.all(), write_only=True
     )
+    id_empleado = serializers.PrimaryKeyRelatedField(
+        queryset=Empleado.objects.all(),
+        required=False,
+        allow_null=True,
+        write_only=True
+    )
+
 
     productos = OrdenVentaProductoSerializer(
         source='ordenventaproducto_set',  # related_name por defecto
@@ -95,6 +104,7 @@ class OrdenVentaSerializer(serializers.ModelSerializer):
             "id_cliente",
             "id_estado_venta",
             "id_prioridad",
+            "id_empleado",
             "tipo_venta",
             "tipo_venta_display",
             "calle",

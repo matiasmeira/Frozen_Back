@@ -7,6 +7,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse
 from django_filters.rest_framework import DjangoFilterBackend
 from django.conf import settings
+from empleados.models import Empleado
 from stock.models import LoteProduccion  # según tu estructura
 from django.db import models
 from rest_framework import status
@@ -372,7 +373,13 @@ def crear_orden_venta(request):
                 }, status=400)
             # --- FIN DE VALIDACIÓN MANUAL ---
             
-            with transaction.atomic(): # Envolvemos todo en una transacción
+            with transaction.atomic():
+                # Validar empleado si se envió
+                id_empleado = data.get("id_empleado")
+                if id_empleado and not Empleado.objects.filter(pk=id_empleado).exists():
+                    return JsonResponse({"error": "Empleado no encontrado"}, status=400)
+
+                # Crear la orden de venta directamente
                 orden_venta = OrdenVenta.objects.create(
                     id_cliente_id=data.get("id_cliente"),
                     id_estado_venta=estado_creada,
@@ -382,7 +389,8 @@ def crear_orden_venta(request):
                     calle=data.get("calle"),
                     altura=data.get("altura"),
                     localidad=data.get("localidad"),
-                    zona=data.get("zona")
+                    zona=data.get("zona"),
+                    id_empleado_id=id_empleado if id_empleado else None
                 )
 
                 productos = data.get("productos", [])
