@@ -13,6 +13,7 @@ from compras.serializers import (
 )
 from produccion.services import procesar_ordenes_en_espera
 from materias_primas.models import Proveedor
+from materias_primas.models import MateriaPrima
 from .services import crear_lotes_materia_prima
 
 
@@ -70,7 +71,19 @@ class ordenCompraViewSet(viewsets.ModelViewSet):
                 orden.fecha_entrega_real = timezone.now().date()
 
                 for mp in materias_recibidas:
-                    procesar_ordenes_en_espera(mp.get("id_materia_prima"))
+                    mp_id = mp.get("id_materia_prima")
+                    if not mp_id:
+                        # ignorar entradas inválidas
+                        continue
+                    materia = MateriaPrima.objects.filter(id_materia_prima=mp_id).first()
+                    if materia:
+                        try:
+                            procesar_ordenes_en_espera(materia)
+                        except Exception as e:
+                            # registrar y seguir con las demás
+                            print(f"Error procesando órdenes en espera para materia {mp_id}: {e}")
+                    else:
+                        print(f"Advertencia: MateriaPrima id={mp_id} no encontrada al procesar ordenes en espera.")
             
             orden.save()
             
