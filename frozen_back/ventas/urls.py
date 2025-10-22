@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import EstadoVentaViewSet, ClienteViewSet, OrdenVentaViewSet, OrdenVentaProductoViewSet, PrioridadViewSet, crear_orden_venta, detalle_orden_venta, cancelar_orden_view, obtener_facturacion, cambiar_estado_orden_venta
+from .views import EstadoVentaViewSet, ClienteViewSet, OrdenVentaViewSet, OrdenVentaProductoViewSet, PrioridadViewSet, ReclamoViewSet, SugerenciaViewSet, crear_orden_venta, detalle_orden_venta, cancelar_orden_view, obtener_facturacion, cambiar_estado_orden_venta
 from . import views
 
 router = DefaultRouter()
@@ -9,6 +9,8 @@ router.register(r'clientes', ClienteViewSet)
 router.register(r'prioridades', PrioridadViewSet)
 router.register(r'ordenes-venta', OrdenVentaViewSet)
 router.register(r'ordenes-productos', OrdenVentaProductoViewSet)
+router.register(r'reclamos', ReclamoViewSet)
+router.register(r'sugerencias', SugerenciaViewSet)
 
 urlpatterns = [
     path('ordenes-venta/<int:orden_id>/detalle/', detalle_orden_venta, name='detalle_orden_venta'),

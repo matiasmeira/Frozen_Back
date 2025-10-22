@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import EstadoVenta, Cliente, OrdenVenta, OrdenVentaProducto, Prioridad
+from .models import EstadoVenta, Cliente, OrdenVenta, OrdenVentaProducto, Prioridad, Reclamo, Sugerencia
 from productos.serializers import ProductoSerializer
 from productos.models import Producto
 from empleados.models import Empleado
@@ -24,6 +24,36 @@ class ClienteSerializer(serializers.ModelSerializer):
         model = Cliente
         fields = '__all__'
 
+class ReclamoSerializer(serializers.ModelSerializer):
+    id_cliente = serializers.PrimaryKeyRelatedField(
+        queryset=Cliente.objects.all()
+    )
+
+    class Meta:
+        model = Reclamo
+        fields = [
+            "id_reclamo",
+            "id_cliente",
+            "fecha_reclamo",
+            "titulo",
+            "descripcion",
+            "estado"
+        ]
+
+class SugerenciaSerializer(serializers.ModelSerializer):
+    id_cliente = serializers.PrimaryKeyRelatedField(
+        queryset=Cliente.objects.all(),
+    )
+
+    class Meta:
+        model = Sugerencia
+        fields = [
+            "id_sugerencia",
+            "id_cliente",
+            "fecha_sugerencia",
+            "descripcion",
+            "titulo"
+        ]
 
 
 class OrdenVentaProductoSerializer(serializers.ModelSerializer):

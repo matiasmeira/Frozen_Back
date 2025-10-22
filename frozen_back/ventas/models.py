@@ -43,6 +43,35 @@ class Cliente(models.Model):
     class Meta:
         db_table = "cliente"
 
+class Reclamo(models.Model):
+    id_reclamo = models.AutoField(primary_key=True)
+    id_cliente = models.ForeignKey(
+        Cliente,
+        on_delete=models.CASCADE,
+        db_column="id_cliente"
+    )
+    fecha_reclamo = models.DateTimeField(auto_now_add=True)
+    titulo = models.CharField(max_length=100)
+    descripcion = models.TextField()
+    estado = models.CharField(max_length=50, default="Abierto")  # Ejemplo de estados: Abierto, En Proceso, Cerrado
+
+    class Meta:
+        db_table = "reclamo"
+
+class Sugerencia(models.Model):
+    id_sugerencia = models.AutoField(primary_key=True)
+    id_cliente = models.ForeignKey(
+        Cliente,
+        on_delete=models.CASCADE,
+        db_column="id_cliente"
+    )
+    titulo = models.CharField(max_length=100)
+    fecha_sugerencia = models.DateTimeField(auto_now_add=True)
+    descripcion = models.TextField()
+
+    class Meta:
+        db_table = "sugerencia"
+
 
 
 class DireccionCliente(models.Model):

@@ -12,7 +12,7 @@ from stock.models import LoteProduccion  # según tu estructura
 from django.db import models
 from rest_framework import status
 from .services import gestionar_stock_y_estado_para_orden_venta, cancelar_orden_venta, facturar_orden_y_descontar_stock,  revisar_ordenes_de_venta_pendientes
-from .models import Factura, OrdenVenta
+from .models import Factura, OrdenVenta, Reclamo, Sugerencia
 from django.db import transaction
 from .filters import OrdenVentaFilter
 
@@ -23,12 +23,21 @@ from .serializers import (
     OrdenVentaSerializer,
     OrdenVentaProductoSerializer,
     PrioridadSerializer,
+    ReclamoSerializer,
+    SugerenciaSerializer,
 )
 
 class EstadoVentaViewSet(viewsets.ModelViewSet):
     queryset = EstadoVenta.objects.all()
     serializer_class = EstadoVentaSerializer
 
+class ReclamoViewSet(viewsets.ModelViewSet):
+    queryset = Reclamo.objects.all()
+    serializer_class = ReclamoSerializer
+
+class SugerenciaViewSet(viewsets.ModelViewSet):
+    queryset = Sugerencia.objects.all()
+    serializer_class = SugerenciaSerializer
 
 class ClienteViewSet(viewsets.ModelViewSet):
     queryset = Cliente.objects.all()
