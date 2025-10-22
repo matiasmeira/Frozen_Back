@@ -7,6 +7,10 @@ from recetas.models import Receta, RecetaMateriaPrima
 from django.core.exceptions import ValidationError
 from recetas.models import Receta, RecetaMateriaPrima
 from stock.services import verificar_stock_mp_y_enviar_alerta
+from compras.models import OrdenCompra, OrdenCompraMateriaPrima, OrdenCompraProduccion, EstadoOrdenCompra
+from django.utils import timezone
+from materias_primas.models import MateriaPrima
+from collections import defaultdict
 
 @transaction.atomic
 def procesar_ordenes_en_espera(materia_prima_ingresada):
@@ -68,8 +72,8 @@ def procesar_ordenes_en_espera(materia_prima_ingresada):
                         id_materia_prima=materia,
                         id_estado_lote_materia_prima=estado_disponible_mp
                     )
-                    
                     stock_disponible_total = 0
+
                     for lote in lotes_disponibles:
                         stock_disponible_total += lote.cantidad_disponible
 
@@ -172,6 +176,9 @@ def gestionar_reservas_para_orden_produccion(orden):
 
     stock_completo = True
 
+    # Recolectar faltantes por proveedor para agrupar pedidos
+    faltantes_por_proveedor = defaultdict(list)  # proveedor -> list of (materia, faltante)
+
     for ingrediente in ingredientes:
         materia = ingrediente.id_materia_prima
         cantidad_necesaria = ingrediente.cantidad * orden.cantidad
@@ -181,12 +188,16 @@ def gestionar_reservas_para_orden_produccion(orden):
             id_estado_lote_materia_prima=estado_disponible
         ).order_by("fecha_vencimiento")
 
-        cantidad_a_reservar = cantidad_necesaria
         total_stock = sum([l.cantidad_disponible for l in lotes_disponibles])
 
         if total_stock < cantidad_necesaria:
             stock_completo = False
+            faltante_para_mp = cantidad_necesaria - total_stock
+            proveedor = materia.id_proveedor
+            faltantes_por_proveedor[proveedor].append((materia, faltante_para_mp))
 
+        # Crear reservas disponibles (hasta la cantidad necesaria)
+        cantidad_a_reservar = cantidad_necesaria
         for lote in lotes_disponibles:
             if cantidad_a_reservar <= 0:
                 break
@@ -203,6 +214,42 @@ def gestionar_reservas_para_orden_produccion(orden):
                 id_estado_reserva_materia=estado_activa
             )
             cantidad_a_reservar -= cantidad_reservada
+
+    # Crear órdenes de compra agrupadas por proveedor para los faltantes
+    if faltantes_por_proveedor:
+        try:
+            estado_proceso, _ = EstadoOrdenCompra.objects.get_or_create(descripcion__iexact="En proceso")
+        except Exception:
+            estado_proceso = None
+
+        for proveedor, items in faltantes_por_proveedor.items():
+            try:
+                fecha_solicitud = timezone.now().date()
+                fecha_entrega_estimada = fecha_solicitud + timezone.timedelta(days=(proveedor.lead_time_days or 0))
+
+                orden_compra = OrdenCompra.objects.create(
+                    id_estado_orden_compra=estado_proceso,
+                    id_proveedor=proveedor,
+                    fecha_solicitud=fecha_solicitud,
+                    fecha_entrega_estimada=fecha_entrega_estimada
+                )
+
+                for materia, faltante in items:
+                    cantidad_pedido = max(faltante, materia.cantidad_minima_pedido or 1)
+                    OrdenCompraMateriaPrima.objects.create(
+                        id_orden_compra=orden_compra,
+                        id_materia_prima=materia,
+                        cantidad=cantidad_pedido
+                    )
+
+                OrdenCompraProduccion.objects.create(
+                    id_orden_compra=orden_compra,
+                    id_orden_produccion=orden
+                )
+
+                print(f"Se creó OrdenCompra #{orden_compra.id_orden_compra} para proveedor '{proveedor.nombre}' con {len(items)} items asociada a OrdenProduccion #{orden.id_orden_produccion}")
+            except Exception as e:
+                print(f"Error al crear orden de compra agrupada para proveedor {getattr(proveedor,'nombre',proveedor)}: {e}")
 
     # Actualizar estado de la orden
     if stock_completo:

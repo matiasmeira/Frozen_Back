@@ -3,6 +3,7 @@ from django.db import models
 from productos.models import Producto
 from empleados.models import Empleado
 from stock.models import LoteProduccion
+from ventas.models import OrdenVenta
 
 class EstadoOrdenProduccion(models.Model):
     id_estado_orden_produccion = models.AutoField(primary_key=True)
@@ -55,6 +56,10 @@ class OrdenProduccion(models.Model):
     id_producto = models.ForeignKey(
         Producto, on_delete=models.CASCADE, db_column="id_producto",
         blank=True, null=True
+    )
+    # Asociación opcional a la orden de venta que originó esta orden de producción
+    id_orden_venta = models.ForeignKey(
+        OrdenVenta, on_delete=models.SET_NULL, blank=True, null=True, db_column="id_orden_venta"
     )
 
     class Meta:

@@ -11,6 +11,7 @@ from compras.models import (
 from compras.serializers import (
     estadoOrdenCompraSerializer, ordenCompraProduccionSerializer, ordenCompraSerializer
 )
+from produccion.services import procesar_ordenes_en_espera
 from materias_primas.models import Proveedor
 from .services import crear_lotes_materia_prima
 
@@ -67,6 +68,9 @@ class ordenCompraViewSet(viewsets.ModelViewSet):
                 
                 # Actualizar fecha de entrega real
                 orden.fecha_entrega_real = timezone.now().date()
+
+                for mp in materias_recibidas:
+                    procesar_ordenes_en_espera(mp.get("id_materia_prima"))
             
             orden.save()
             
