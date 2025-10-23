@@ -105,7 +105,6 @@ class OrdenVentaSerializer(serializers.ModelSerializer):
         queryset=Empleado.objects.all(),
         required=False,
         allow_null=True,
-        write_only=True
     )
 
 
