@@ -6,6 +6,7 @@ from rest_framework.response import Response
 from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse
 from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework.decorators import action
 from django.conf import settings
 from empleados.models import Empleado
 from stock.models import LoteProduccion  # según tu estructura
@@ -61,6 +62,15 @@ class OrdenVentaViewSet(viewsets.ModelViewSet):
     ordering_fields = ['fecha', 'fecha_entrega']
     ordering = ['-fecha']
 
+    @action(detail=False, methods=['get'], url_path='no-pagadas-o-facturadas')
+    def get_no_pagadas_o_facturadas(self, request):
+        # Filtra todas las órdenes que NO tengan estado "Pagada" o "Facturada"
+        ordenes = OrdenVenta.objects.exclude(
+            id_estado_venta__descripcion__in=["Pagada", "Facturada", "Despachando", "Despachado"]
+        )
+
+        serializer = self.get_serializer(ordenes, many=True)
+        return Response(serializer.data)
 
 """
 def actualizar_estado_orden(orden):
@@ -326,6 +336,7 @@ def cancelar_orden_view(request, orden_id):
 def listar_ordenes_venta(request):
     if request.method == "GET":
         try:
+
             ordenes = OrdenVenta.objects.all().order_by("-fecha")
 
             data = []
