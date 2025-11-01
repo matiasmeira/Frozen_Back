@@ -4,10 +4,10 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db import transaction
-from produccion.services import gestionar_reservas_para_orden_produccion, descontar_stock_reservado, calcular_porcentaje_desperdicio_historico
+from produccion.services import gestionar_reservas_para_orden_produccion, descontar_stock_reservado, calcular_porcentaje_desperdicio_historico, verificar_y_actualizar_op_segun_ots
 from recetas.models import Receta, RecetaMateriaPrima
 from productos.models import Producto
-from .models import EstadoOrdenProduccion, LineaProduccion, OrdenProduccion, NoConformidad, estado_linea_produccion
+from .models import EstadoOrdenProduccion, LineaProduccion, OrdenProduccion, NoConformidad, estado_linea_produccion, OrdenDeTrabajo
 from stock.models import EstadoLoteMateriaPrima, LoteMateriaPrima, LoteProduccion, EstadoLoteProduccion, LoteProduccionMateria, EstadoReservaMateria, ReservaMateriaPrima
 from .serializers import (
     EstadoOrdenProduccionSerializer,
@@ -15,7 +15,8 @@ from .serializers import (
     OrdenProduccionSerializer,
     OrdenProduccionUpdateEstadoSerializer,
     NoConformidadSerializer,
-    HistoricalOrdenProduccionSerializer
+    HistoricalOrdenProduccionSerializer,
+    OrdenDeTrabajoSerializer
 )
 from .filters import OrdenProduccionFilter
 from django.utils import timezone
@@ -46,11 +47,40 @@ class EstadoLineaProduccionViewSet(viewsets.ModelViewSet):
 # ------------------------------
 
 
+class OrdenDeTrabajoViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet para gestionar las Órdenes de Trabajo (los fragmentos).
+    """
+    queryset = OrdenDeTrabajo.objects.all().select_related(
+        'id_orden_produccion', 
+        'id_linea_produccion', 
+        'id_estado_orden_trabajo'
+    )
+    serializer_class = OrdenDeTrabajoSerializer # Debes crear este serializer
+    
+    # (Añade filtros si los necesitas, similar a tu OPViewSet)
+    
+    def perform_update(self, serializer):
+        """
+        Sobreescribimos 'perform_update' para que actúe como disparador.
+        """
+        # 1. Guarda la OT normalmente
+        orden_trabajo = serializer.save()
+        
+        # 2. Llama a nuestro servicio de verificación
+        #    Le pasamos el ID de la OP "padre"
+        if orden_trabajo.id_orden_produccion:
+            verificar_y_actualizar_op_segun_ots(
+                orden_trabajo.id_orden_produccion.id_orden_produccion
+            )
+
+
+
 #V2
 class OrdenProduccionViewSet(viewsets.ModelViewSet):
     queryset = OrdenProduccion.objects.all().select_related(
         "id_estado_orden_produccion",
-        "id_linea_produccion",
+    #    "id_linea_produccion",
         "id_supervisor",
         "id_operario",
         "id_lote_produccion",
@@ -137,59 +167,22 @@ class OrdenProduccionViewSet(viewsets.ModelViewSet):
         nuevo_estado = serializer.validated_data['id_estado_orden_produccion']
         estado_descripcion = nuevo_estado.descripcion.lower()
 
-        # Actualizar el estado de la orden
+        # --- 1. VALIDACIÓN DE LÓGICA DE NEGOCIO ---
+        if estado_descripcion == 'finalizada':
+            if orden.id_estado_orden_produccion.descripcion.lower() != 'finalizada':
+                return Response(
+                    {'error': 'No se puede forzar el estado "Finalizada" manualmente. '
+                              'Este estado se aplica automáticamente cuando todas '
+                              'las Órdenes de Trabajo asociadas se completan.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Actualizar el estado de la orden (SOLO si no es 'finalizada' o ya lo era)
         orden.id_estado_orden_produccion = nuevo_estado
         orden.save()
 
-        # --- 🔹 CASO 1: ORDEN FINALIZADA ---
         if estado_descripcion == 'finalizada':
-            try:
-                # Descontar definitivamente el stock reservado (basado en la orden original, ej. 100 pizzas)
-                descontar_stock_reservado(orden)
-            except Exception as e:
-                return Response(
-                    {'error': f'Error al descontar stock reservado: {str(e)}'},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
-
-            # Marcar el lote de producción como "Disponible" Y AJUSTAR CANTIDAD
-            if orden.id_lote_produccion:
-                try:
-                    estado_disponible = EstadoLoteProduccion.objects.get(descripcion__iexact="Disponible")
-                    lote = orden.id_lote_produccion
-
-                    # --- NUEVO: LÓGICA DE AJUSTE POR DESPERDICIO ---
-                    
-                    # 1. Calcular el total de desperdicio registrado para esta orden
-                    total_desperdicio = NoConformidad.objects.filter(
-                        id_orden_produccion=orden
-                    ).aggregate(
-                        total=Sum('cant_desperdiciada')
-                    )['total'] or 0
-                    
-                    # 2. Obtener la cantidad planificada (ya sea de la orden o del lote)
-                    #    Asumimos que lote.cantidad tiene el valor original (ej. 100)
-                    cantidad_planificada = lote.cantidad 
-                    
-                    # 3. Calcular la cantidad final real y asegurarse de que no sea negativa
-                    cantidad_final = max(0, cantidad_planificada - total_desperdicio)
-                    
-                    # 4. Actualizar el lote con la cantidad final (ej. 100 - 5 = 95)
-                    lote.cantidad = cantidad_final
-                    lote.id_estado_lote_produccion = estado_disponible
-                    lote.save()
-                    
-                    # --- FIN NUEVO ---
-
-                    # Revisar órdenes de venta pendientes
-                    if lote.id_producto:
-                        revisar_ordenes_de_venta_pendientes(lote.id_producto)
-
-                except EstadoLoteProduccion.DoesNotExist:
-                    return Response(
-                        {'error': 'Estado de lote "Disponible" no encontrado'},
-                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                    )
+            pass # No hacer nada aquí, solo permitir la llamada si ya estaba finalizada
 
         # --- 🔹 CASO 2: ORDEN CANCELADA ---
         elif estado_descripcion == 'cancelada':
@@ -233,6 +226,26 @@ class OrdenProduccionViewSet(viewsets.ModelViewSet):
                     {'error': f'Error al liberar reservas: {str(e)}'},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
+            try:
+                # Obtener los estados relevantes
+                estado_ot_cancelada = EstadoOrdenTrabajo.objects.get(descripcion__iexact='Cancelada')
+                estados_finales_ot = EstadoOrdenTrabajo.objects.filter(
+                    Q(descripcion__iexact='Completada') | Q(descripcion__iexact='Cancelada')
+                )
+                
+                # Buscar OTs hijas que NO estén ya en un estado final
+                ots_a_cancelar = orden.ordenes_de_trabajo.exclude(
+                    id_estado_orden_trabajo__in=estados_finales_ot
+                )
+                
+                # Cancelarlas en lote
+                count = ots_a_cancelar.count()
+                if count > 0:
+                    ots_a_cancelar.update(id_estado_orden_trabajo=estado_ot_cancelada)
+                    print(f"Canceladas {count} Órdenes de Trabajo hijas de la OP {orden.id_orden_produccion}.")
+            
+            except EstadoOrdenTrabajo.DoesNotExist:
+                print(f"Advertencia: No se pudo encontrar el estado 'Cancelada' para OrdenDeTrabajo.")
 
         # --- 🔹 CASO 3: ORDEN PENDIENTE DE INICIO ---
         elif estado_descripcion == 'pendiente de inicio':
@@ -266,7 +279,33 @@ class OrdenProduccionViewSet(viewsets.ModelViewSet):
         }, status=status.HTTP_200_OK)
 
 
+    @action(detail=False, methods=['delete'], url_path='bulk-delete')
+    def bulk_delete(self, request):
+        """
+        Borra órdenes de producción dentro de un rango de IDs pasados como query params: ?inicio=100&fin=50
+        """
+        inicio = request.query_params.get('inicio')
+        fin = request.query_params.get('fin')
 
+        if not inicio or not fin:
+            return Response({"detail": "Se requieren parámetros 'inicio' y 'fin'"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            inicio = int(inicio)
+            fin = int(fin)
+        except ValueError:
+            return Response({"detail": "Los parámetros deben ser enteros"}, status=status.HTTP_400_BAD_REQUEST)
+
+        id_min = min(inicio, fin)
+        id_max = max(inicio, fin)
+
+        ordenes = OrdenProduccion.objects.filter(id_orden_produccion__gte=id_min,
+                                                 id_orden_produccion__lte=id_max)
+        count = ordenes.count()
+        ordenes.delete()  # Esto borrará automáticamente los NoConformidad por on_delete=CASCADE
+        return Response({"detail": f"{count} órdenes de producción borradas"}, status=status.HTTP_204_NO_CONTENT)
+    
+    
 # ------------------------------
 # ViewSet de NoConformidad
 # ------------------------------

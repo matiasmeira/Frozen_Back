@@ -1,7 +1,7 @@
 
 from django.db import transaction, models
-from django.db.models import Sum
-from .models import OrdenProduccion, EstadoOrdenProduccion, NoConformidad, OrdenProduccion
+from django.db.models import Sum, Q, Count
+from .models import OrdenProduccion, EstadoOrdenProduccion, OrdenProduccion, NoConformidad
 from stock.models import LoteMateriaPrima, EstadoLoteMateriaPrima, LoteProduccionMateria, ReservaMateriaPrima, EstadoReservaMateria
 from recetas.models import Receta, RecetaMateriaPrima
 from django.core.exceptions import ValidationError
@@ -12,6 +12,7 @@ from django.utils import timezone
 from materias_primas.models import MateriaPrima
 from collections import defaultdict
 import math
+from stock.models import EstadoLoteProduccion
 
 @transaction.atomic
 def procesar_ordenes_en_espera(materia_prima_ingresada):
@@ -379,3 +380,96 @@ def calcular_porcentaje_desperdicio_historico(id_producto: int) -> float:
         porcentaje_desperdicio = 0.0
 
     return round(porcentaje_desperdicio, 2) # Devolver float redondeado
+
+
+
+
+
+@transaction.atomic
+def verificar_y_actualizar_op_segun_ots(orden_produccion_id):
+    """
+    Verifica las OTs de una OP. Si todas están en estado final,
+    actualiza la OP a 'Finalizada', descuenta stock y ajusta el lote.
+    """
+    try:
+        orden = OrdenProduccion.objects.get(id_orden_produccion=orden_produccion_id)
+    except OrdenProduccion.DoesNotExist:
+        print(f"Error: No se encontró la OP {orden_produccion_id} para verificar.")
+        return
+
+    # 1. Definir qué estados de OT cuentan como "finalizados"
+    #    (Ajusta esto a los nombres en tu BBDD)
+    estados_finales_ot = Q(
+        id_estado_orden_trabajo__descripcion__iexact='Completada'
+    ) | Q(
+        id_estado_orden_trabajo__descripcion__iexact='Cancelada'
+    )
+
+    # 2. Contar OTs
+    total_ots = orden.ordenes_de_trabajo.count()
+    ots_finalizadas = orden.ordenes_de_trabajo.filter(estados_finales_ot).count()
+
+    # 3. Condición de finalización
+    #    (Debe tener OTs creadas Y todas deben estar finalizadas)
+    if total_ots > 0 and total_ots == ots_finalizadas:
+        
+        print(f"Todas las OTs para la OP {orden.id_orden_produccion} están finalizadas. Actualizando OP...")
+        
+        # 4. Obtener el estado "Finalizada" para la OP
+        try:
+            estado_op_finalizada = EstadoOrdenProduccion.objects.get(descripcion__iexact="Finalizada")
+            estado_lote_disponible = EstadoLoteProduccion.objects.get(descripcion__iexact="Disponible")
+        except (EstadoOrdenProduccion.DoesNotExist, EstadoLoteProduccion.DoesNotExist) as e:
+            print(f"Error: No se encontró estado 'Finalizada' o 'Disponible'. {e}")
+            # Lanzar una excepción para revertir la transacción si es crítico
+            raise ValidationError(f"Estados 'Finalizada'/'Disponible' no configurados: {e}")
+
+        # 5. LÓGICA DE FINALIZACIÓN (Adaptada de tu ViewSet)
+        
+        # 5.1. Descontar stock reservado (si aún no se hizo)
+        #      (Asegúrate de que descontar_stock_reservado sea idempotente
+        #       o verifica el estado de la OP antes de llamar)
+        if orden.id_estado_orden_produccion != estado_op_finalizada:
+            try:
+                descontar_stock_reservado(orden)
+            except Exception as e:
+                print(f"Error al descontar stock para OP {orden.id_orden_produccion}: {e}")
+                # Decide si esto debe detener la finalización
+                raise ValidationError(f"Error descontando stock: {e}")
+
+            # 5.2. Actualizar Lote de Producción (Lógica MEJORADA)
+            #      La cantidad final del lote NO es (planificada - desperdicio),
+            #      es la SUMA de lo realmente producido en las OTs 'Completadas'.
+            if orden.id_lote_produccion:
+                lote = orden.id_lote_produccion
+                
+                # Suma la 'cantidad_producida' (real) solo de OTs 'Completadas'
+                total_producido_real = orden.ordenes_de_trabajo.filter(
+                    id_estado_orden_trabajo__descripcion__iexact='Completada'
+                ).aggregate(
+                    total=Sum('cantidad_producida')
+                )['total'] or 0
+                
+                lote.cantidad = total_producido_real
+                lote.id_estado_lote_produccion = estado_lote_disponible
+                lote.save()
+                
+                print(f"Lote {lote.id_lote_produccion} actualizado. Cantidad final: {total_producido_real}")
+
+                # 5.3. Revisar Ventas (si aplica)
+                if lote.id_producto:
+                    # Asumiendo que esta función existe
+                    # revisar_ordenes_de_venta_pendientes(lote.id_producto)
+                    pass 
+            
+            # 5.4. Actualizar estado de la OP
+            orden.id_estado_orden_produccion = estado_op_finalizada
+            orden.save()
+            
+            print(f"✅ OP {orden.id_orden_produccion} marcada como 'Finalizada'.")
+        
+        else:
+            print(f"La OP {orden.id_orden_produccion} ya estaba 'Finalizada'. No se repiten acciones.")
+
+    else:
+        print(f"OP {orden.id_orden_produccion}: {ots_finalizadas}/{total_ots} OTs finalizadas. Aún no se completa.")

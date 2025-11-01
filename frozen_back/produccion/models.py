@@ -24,7 +24,8 @@ class LineaProduccion(models.Model):
     id_linea_produccion = models.AutoField(primary_key=True)
     descripcion = models.CharField(max_length=100)
     id_estado_linea_produccion = models.ForeignKey(estado_linea_produccion, on_delete=models.CASCADE, db_column="id_estado_linea_produccion")
-
+    capacidad_por_hora = models.FloatField(default=0.0)
+    
     class Meta:
         db_table = "linea_produccion"
 
@@ -38,9 +39,11 @@ class OrdenProduccion(models.Model):
     id_estado_orden_produccion = models.ForeignKey(
         EstadoOrdenProduccion, on_delete=models.CASCADE, db_column="id_estado_orden_produccion"
     )
+    """  Comentamos ya que la Orden de Trabajo tendra la relacion con la linea de produccion
     id_linea_produccion = models.ForeignKey(
         LineaProduccion, on_delete=models.SET_NULL, blank=True, null=True, db_column="id_linea_produccion"
     )
+    """
     id_supervisor = models.ForeignKey(
         Empleado, on_delete=models.SET_NULL, blank=True, null=True,
         related_name="ordenes_supervisadas", db_column="id_supervisor"
@@ -67,11 +70,87 @@ class OrdenProduccion(models.Model):
         db_table = "orden_produccion"
 
 
-class NoConformidad(models.Model):
-    id_no_conformidad = models.AutoField(primary_key=True)
-    id_orden_produccion = models.ForeignKey(OrdenProduccion, on_delete=models.CASCADE, db_column="id_orden_produccion")
-    descripcion = models.CharField(max_length=100)
-    cant_desperdiciada = models.IntegerField()
+
+class EstadoOrdenTrabajo(models.Model):
+    id_estado_orden_trabajo = models.AutoField(primary_key=True)
+    descripcion = models.CharField(max_length=50)
+    # Podrías añadir un campo 'es_final' (Boolean) 
+    # para marcar estados como "Completada" o "Cancelada"
 
     class Meta:
-        db_table = "no_conformidades"
+        db_table = "estado_orden_trabajo"
+        verbose_name = "Estado de Orden de Trabajo"
+        verbose_name_plural = "Estados de Órdenes de Trabajo"
+
+    def __str__(self):
+        return self.descripcion
+    
+
+class NoConformidad(models.Model):
+        id_no_conformidad = models.AutoField(primary_key=True)
+        id_orden_produccion = models.ForeignKey(OrdenProduccion, on_delete=models.CASCADE, db_column="id_orden_produccion")
+        """
+        id_orden_trabajo = models.ForeignKey(
+            OrdenDeTrabajo,  # Vincular al "hijo"
+            on_delete=models.CASCADE, 
+            db_column="id_orden_trabajo"
+        )
+        """
+        descripcion = models.CharField(max_length=100)
+        cant_desperdiciada = models.IntegerField()
+
+        class Meta:
+            db_table = "no_conformidades"
+
+
+class OrdenDeTrabajo(models.Model):
+    id_orden_trabajo = models.AutoField(primary_key=True)
+    
+    # --- Vínculos Clave ---
+    id_orden_produccion = models.ForeignKey(
+        OrdenProduccion, 
+        on_delete=models.CASCADE, 
+        db_column="id_orden_produccion",
+        related_name="ordenes_de_trabajo" # Permite OP.ordenes_de_trabajo.all()
+    )
+    id_linea_produccion = models.ForeignKey(
+        LineaProduccion, 
+        on_delete=models.PROTECT,  # Evita borrar una línea con trabajo asignado
+        db_column="id_linea_produccion",
+        related_name="ordenes_de_trabajo" # Permite LP.ordenes_de_trabajo.all()
+    )
+    
+    # --- Datos de Planificación (El "Fragmento") ---
+    # (Estos campos los llenará tu algoritmo de planificación)
+    cantidad_programada = models.IntegerField()
+    hora_inicio_programada = models.DateTimeField()
+    hora_fin_programada = models.DateTimeField()
+
+    # --- Seguimiento y Control ---
+    id_estado_orden_trabajo = models.ForeignKey(
+        EstadoOrdenTrabajo, 
+        on_delete=models.SET_NULL, 
+        null=True,
+        blank=True, # Permite un estado nulo, aunque deberías asignar un default
+        db_column="id_estado_orden_trabajo"
+    )
+    
+    # (Opcional pero recomendado: campos para la ejecución real)
+    hora_inicio_real = models.DateTimeField(null=True, blank=True)
+    hora_fin_real = models.DateTimeField(null=True, blank=True)
+    cantidad_producida = models.IntegerField(null=True, blank=True)
+
+    # --- Auditoría ---
+    history = HistoricalRecords()
+
+    class Meta:
+        db_table = "orden_de_trabajo"
+        verbose_name = "Orden de Trabajo"
+        verbose_name_plural = "Órdenes de Trabajo"
+        ordering = ['hora_inicio_programada'] # Ordena por defecto
+
+    def __str__(self):
+        return f"OT-{self.id_orden_trabajo} (OP: {self.id_orden_produccion.id_orden_produccion})"
+    
+
+    
