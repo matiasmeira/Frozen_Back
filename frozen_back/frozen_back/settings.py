@@ -57,6 +57,8 @@ INSTALLED_APPS = [
     'despachos',
     'drf_spectacular',
     'simple_history',
+    'planificacion',
+    'reportes',
 ]
 
 MIDDLEWARE = [
