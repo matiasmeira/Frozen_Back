@@ -59,6 +59,7 @@ class OrdenDespachoViewSet(viewsets.ViewSet):
         return Response(serializer.data)
 
     def create(self, request):
+        print(request.data)
         serializer = CrearOrdenDespachoSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         despacho = serializer.save()
