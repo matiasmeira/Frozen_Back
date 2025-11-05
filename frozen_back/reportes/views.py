@@ -372,3 +372,59 @@ class LineasProduccionYEstado(APIView):
         ]
         """
         return Response(list(lineas))
+    
+class ReporteFactorCalidadOEE(APIView):
+    """
+    API para calcular el Factor de Calidad del OEE.
+    Calidad = ((Total Programado - Total Desperdiciado) / Total Programado) * 100
+    """
+    def get(self, request, *args, **kwargs):
+        fecha_desde, fecha_hasta = parsear_fechas(request)
+        if fecha_desde is None:
+            return Response({"error": "Formato de fecha inválido. Usar YYYY-MM-DD."}, status=400)
+
+        # 1. CALCULAR EL TOTAL DESPERDICIADO (PÉRDIDAS)
+        total_desperdiciado_query = NoConformidad.objects.filter(
+            id_orden_produccion__fecha_creacion__range=(fecha_desde, fecha_hasta)
+        ).aggregate(
+            total_desperdiciado=Coalesce(
+                Sum('cant_desperdiciada'), 
+                Value(0.0), 
+                output_field=FloatField()
+            )
+        )
+        total_desperdiciado = total_desperdiciado_query.get('total_desperdiciado', 0.0)
+
+        # 2. CALCULAR EL TOTAL PROGRAMADO (VOLUMEN)
+        # Lo usamos como el 'Total Producido' en este contexto para el cálculo del ratio.
+        total_programado_query = OrdenDeTrabajo.objects.filter(
+            hora_inicio_programada__range=(fecha_desde, fecha_hasta)
+        ).aggregate(
+            total_programado=Coalesce(
+                Sum('cantidad_programada'), 
+                Value(0.0),
+                output_field=FloatField()
+            )
+        )
+        total_programado = total_programado_query.get('total_programado', 0.0)
+
+        # 3. CÁLCULO DEL FACTOR CALIDAD
+        factor_calidad = 0.0
+        
+        if total_programado > 0:
+            # Piezas Buenas = Total Programado - Total Desperdiciado
+            piezas_buenas = total_programado - total_desperdiciado
+            
+            # Factor Calidad = (Piezas Buenas / Total Programado) * 100
+            factor_calidad = (piezas_buenas / total_programado) * 100.0
+
+        # 4. PREPARAR RESPUESTA
+        resultado = {
+            "fecha_desde": fecha_desde.strftime('%Y-%m-%d'),
+            "fecha_hasta": fecha_hasta.strftime('%Y-%m-%d'),
+            "total_programado": total_programado,
+            "total_desperdiciado": total_desperdiciado,
+            "factor_calidad_oee": round(factor_calidad, 2) # Porcentaje del 0 al 100
+        }
+
+        return Response(resultado)
