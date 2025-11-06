@@ -154,8 +154,13 @@ class OrdenDeTrabajoSerializer(serializers.ModelSerializer):
         read_only=True
     )
 
+    producto_nombre = serializers.CharField(
+        source='id_orden_produccion.id_producto.nombre', 
+        read_only=True
+    )
+
     class Meta:
         model = OrdenDeTrabajo
         fields = '__all__'
         # Añadimos el campo opcional a la lista de 'fields' si no usas '__all__'
-        # read_only_fields = ['estado_descripcion']
+        read_only_fields = ['producto_nombre']
