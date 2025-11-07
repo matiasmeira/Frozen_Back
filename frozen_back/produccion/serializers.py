@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import EstadoOrdenProduccion, LineaProduccion, OrdenProduccion, NoConformidad, estado_linea_produccion, OrdenDeTrabajo
+from .models import EstadoOrdenProduccion, LineaProduccion, OrdenProduccion, NoConformidad, TipoNoConformidad, estado_linea_produccion, OrdenDeTrabajo
 from empleados.models import Empleado
 from productos.models import Producto
 from stock.models import LoteProduccion, EstadoLoteProduccion
@@ -118,11 +118,27 @@ class OrdenProduccionUpdateEstadoSerializer(serializers.ModelSerializer):
 # ------------------------------
 # Serializer de NoConformidad
 # ------------------------------
-class NoConformidadSerializer(serializers.ModelSerializer):
+# Nuevo Serializer para el Tipo de No Conformidad
+class TipoNoConformidadSerializer(serializers.ModelSerializer):
     class Meta:
-        model = NoConformidad
+        model = TipoNoConformidad
         fields = '__all__'
 
+# Serializer para crear una No Conformidad desde la OT (incluye el nuevo FK)
+class NoConformidadCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = NoConformidad
+        # Asegúrate de incluir el nuevo campo 'id_tipo_no_conformidad'
+        fields = ['cant_desperdiciada', 'id_tipo_no_conformidad', 'id_orden_trabajo']
+        read_only_fields = ['id_orden_trabajo'] 
+
+# Serializer principal de NoConformidad (para lectura/listado)
+class NoConformidadSerializer(serializers.ModelSerializer):
+    tipo_no_conformidad = TipoNoConformidadSerializer(source='id_tipo_no_conformidad', read_only=True)
+    
+    class Meta:
+        model = NoConformidad
+        fields = ['id_no_conformidad', 'id_orden_trabajo', 'id_tipo_no_conformidad', 'tipo_no_conformidad', 'cant_desperdiciada']
 
 
 class HistoricalOrdenProduccionSerializer(serializers.ModelSerializer):

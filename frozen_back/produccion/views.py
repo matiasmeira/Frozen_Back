@@ -7,7 +7,7 @@ from django.db import transaction
 from produccion.services import gestionar_reservas_para_orden_produccion, descontar_stock_reservado, calcular_porcentaje_desperdicio_historico, verificar_y_actualizar_op_segun_ots
 from recetas.models import Receta, RecetaMateriaPrima
 from productos.models import Producto
-from .models import EstadoOrdenProduccion, EstadoOrdenTrabajo, LineaProduccion, OrdenProduccion, NoConformidad, PausaOT, estado_linea_produccion, OrdenDeTrabajo
+from .models import EstadoOrdenProduccion, EstadoOrdenTrabajo, LineaProduccion, OrdenProduccion, NoConformidad, PausaOT, TipoNoConformidad, estado_linea_produccion, OrdenDeTrabajo
 from stock.models import EstadoLoteMateriaPrima, LoteMateriaPrima, LoteProduccion, EstadoLoteProduccion, LoteProduccionMateria, EstadoReservaMateria, ReservaMateriaPrima
 from .serializers import (
     EstadoOrdenProduccionSerializer,
@@ -16,7 +16,9 @@ from .serializers import (
     OrdenProduccionUpdateEstadoSerializer,
     NoConformidadSerializer,
     HistoricalOrdenProduccionSerializer,
-    OrdenDeTrabajoSerializer
+    OrdenDeTrabajoSerializer,
+    TipoNoConformidadSerializer,
+    NoConformidadCreateSerializer
 )
 from .filters import OrdenProduccionFilter
 from django.utils import timezone
@@ -41,7 +43,12 @@ class EstadoLineaProduccionViewSet(viewsets.ModelViewSet):
     queryset = estado_linea_produccion.objects.all()
     serializer_class = EstadoOrdenProduccionSerializer
 
-
+class TipoNoConformidadViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet para gestionar los Tipos de No Conformidad.
+    """
+    queryset = TipoNoConformidad.objects.all()
+    serializer_class = TipoNoConformidadSerializer
 # ------------------------------
 # ViewSet de OrdenProduccion
 # ------------------------------
@@ -229,6 +236,40 @@ class OrdenDeTrabajoViewSet(viewsets.ModelViewSet):
              verificar_y_actualizar_op_segun_ots(ot.id_orden_produccion.id_orden_produccion)
 
         return Response({'message': 'OT finalizada correctamente'}, status=status.HTTP_200_OK)
+    # =================================================================
+    # 5. ACCIÓN REGISTRAR NO CONFORMIDAD (NUEVO)
+    # =================================================================
+    @action(detail=True, methods=['post'])
+    @transaction.atomic
+    def registrar_no_conformidad(self, request, pk=None):
+        """ 
+        Registra una No Conformidad con su tipo asociado y cantidad desperdiciada.
+        Solo permitido si el estado es 'En Progreso'.
+        """
+        ot = get_object_or_404(OrdenDeTrabajo, pk=pk)
+        
+        # 1. Validación de Estado
+        if ot.id_estado_orden_trabajo.descripcion.lower() != 'en progreso':
+            return Response(
+                {'error': 'La No Conformidad solo puede registrarse cuando la OT está en estado "En Progreso".'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # 2. Serialización y Validación de Datos (Usando el serializer de creación)
+        # Importante: Asume que tienes el NoConformidadCreateSerializer definido e importado
+        serializer = NoConformidadCreateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        # 3. Guardar la No Conformidad
+        # Asignamos la OT actual antes de guardar
+        serializer.save(id_orden_trabajo=ot)
+        
+        # 4. Respuesta
+        return Response({
+            'message': 'No Conformidad registrada correctamente para esta Orden de Trabajo.',
+            'data': serializer.data
+        }, status=status.HTTP_201_CREATED)
 
 
 #V2
@@ -465,7 +506,7 @@ class OrdenProduccionViewSet(viewsets.ModelViewSet):
 # ViewSet de NoConformidad
 # ------------------------------
 class NoConformidadViewSet(viewsets.ModelViewSet):
-    queryset = NoConformidad.objects.all().select_related("id_orden_produccion")
+    queryset = NoConformidad.objects.all().select_related("id_orden_produccion","id_tipo_no_conformidad")
     serializer_class = NoConformidadSerializer
 
 
