@@ -2,7 +2,7 @@ from django.shortcuts import render
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.db.models import Sum, F, Count
-from django.db.models.functions import TruncDate, TruncMonth
+from django.db.models.functions import TruncDate, TruncMonth, TruncWeek, ExtractYear
 from datetime import datetime, timedelta # Asegúrate de importar timedelta si usas el helper
 
 
@@ -184,7 +184,7 @@ class ReporteConsumoMateriaPrima(APIView):
 class ReporteDesperdicioPorCausa(APIView):
     """
     API para gráfico de torta o barras (Pareto).
-    Muestra el total desperdiciado agrupado por la razón (descripción).
+    Muestra el total desperdiciado agrupado por la causa estandarizada (TipoNoConformidad).
 
     Filtros (Query Params):
     - ?fecha_desde=YYYY-MM-DD
@@ -195,27 +195,30 @@ class ReporteDesperdicioPorCausa(APIView):
         if fecha_desde is None:
             return Response({"error": "Formato de fecha inválido."}, status=400)
 
-        # Filtramos por la fecha de la Orden de Producción asociada
-        # (NoConformidad no tiene fecha propia)
+        # 1. FILTRADO: Usamos la fecha de creación de la Orden de Producción (OP), 
+        #    accediendo a través de la Orden de Trabajo (OT).
         query = NoConformidad.objects.filter(
-            id_orden_produccion__fecha_creacion__range=(fecha_desde, fecha_hasta) # O usa fecha_inicio
+            # Cadena de FKs: NC -> OT -> OP -> fecha_creacion
+            id_orden_trabajo__id_orden_produccion__fecha_creacion__range=(fecha_desde, fecha_hasta)
         )
 
-        # Agregación: Agrupar por la descripción de la no conformidad
+        # 2. AGRUPACIÓN: Agrupar por el Tipo de No Conformidad (causa estandarizada)
         reporte = query.values(
-            razon=F('descripcion')
+            # Agrupamos por el nombre del TipoNoConformidad
+            causa=F('id_tipo_no_conformidad__nombre') 
         ).annotate(
             total_desperdiciado=Sum('cant_desperdiciada')
         ).order_by('-total_desperdiciado')
 
-        # Salida: [{"razon": "Falla de máquina", "total_desperdiciado": 150}, ...]
+        # Salida: [{"causa": "Falla de Empaque", "total_desperdiciado": 150}, ...]
         return Response(reporte)
 
 
 class ReporteDesperdicioPorProducto(APIView):
     """
     API para gráfico de barras.
-    Muestra el total desperdiciado agrupado por producto.
+    Muestra el total desperdiciado agrupado por producto,
+    utilizando la cadena de FK: NoConformidad -> OrdenDeTrabajo -> OrdenProduccion -> Producto.
 
     Filtros (Query Params):
     - ?fecha_desde=YYYY-MM-DD
@@ -226,13 +229,18 @@ class ReporteDesperdicioPorProducto(APIView):
         if fecha_desde is None:
             return Response({"error": "Formato de fecha inválido."}, status=400)
 
+        # 1. FILTRADO: Usamos la fecha_creacion de la Orden de Producción,
+        #    accediendo a través de la Orden de Trabajo.
         query = NoConformidad.objects.filter(
-            id_orden_produccion__fecha_creacion__range=(fecha_desde, fecha_hasta)
+            # Cadena de FKs: NC -> OT -> OP -> fecha_creacion
+            id_orden_trabajo__id_orden_produccion__fecha_creacion__range=(fecha_desde, fecha_hasta)
         )
 
-        # Agregación: Agrupar por producto
+        # 2. AGRUPACIÓN: Agrupar por producto, accediendo a la descripción del producto
+        #    a través de la Orden de Producción.
         reporte = query.values(
-            producto_nombre=F('id_orden_produccion__id_producto__descripcion')
+            # Cadena de FKs: NC -> OT -> OP -> Producto -> descripción
+            producto_nombre=F('id_orden_trabajo__id_orden_produccion__id_producto__descripcion')
         ).annotate(
             total_desperdiciado=Sum('cant_desperdiciada')
         ).order_by('-total_desperdiciado')
@@ -354,6 +362,151 @@ class ReporteCumplimientoPlan(APIView):
         }
 
         return Response(resultado)
+    
+class ReporteCumplimientoPlanMensual(APIView):
+    """
+    API para calcular el Porcentaje de Cumplimiento de Adherencia (PCA) agrupado por mes.
+    """
+    def get(self, request, *args, **kwargs):
+        fecha_desde, fecha_hasta = parsear_fechas(request)
+        
+        if fecha_desde is None or fecha_hasta is None:
+            return Response({"error": "Debe proporcionar fechas válidas (desde, hasta) en formato YYYY-MM-DD."}, status=400)
+
+        # 1. ANOTAR LAS OTs con el mes, año y si cumplió la fecha programada
+        ots_base = OrdenDeTrabajo.objects.filter(
+            hora_inicio_programada__range=(fecha_desde, fecha_hasta),
+        ).annotate(
+            # Campo para agrupar: Mes de la hora de inicio programada
+            mes_reporte=TruncMonth('hora_inicio_programada'),
+            
+            # Campos para verificar cumplimiento
+            dia_fin_real=F('hora_fin_real__date'),
+            dia_fin_programado=F('hora_fin_programada__date')
+        ).annotate(
+            cumplio_fecha=Case(
+                When(
+                    # Criterio de cumplimiento: Día de fin real <= Día de fin programado
+                    dia_fin_real__lte=F('dia_fin_programado'), 
+                    # El estado debe ser 'Completada' y la hora_fin_real no nula
+                    id_estado_orden_trabajo__descripcion='Completada',
+                    hora_fin_real__isnull=False,
+                    then=Value(True)
+                ),
+                default=Value(False),
+                output_field=BooleanField()
+            )
+        )
+        
+        # 2. AGREGAR Y AGRUPAR POR MES
+        resultados_agrupados = ots_base.values('mes_reporte').annotate(
+            # Denominador: Total planificado para ese mes
+            total_planificado=Coalesce(Sum('cantidad_programada'), Value(0.0), output_field=FloatField()),
+            
+            # Numerador: Suma de la cantidad_programada SOLO de las que cumplieron
+            total_cumplido_adherencia=Coalesce(
+                Sum(
+                    Case(
+                        When(cumplio_fecha=True, then='cantidad_programada'),
+                        default=Value(0),
+                        output_field=FloatField()
+                    )
+                ), 
+                Value(0.0),
+                output_field=FloatField()
+            )
+        ).order_by('mes_reporte')
+        
+        # 3. Formatear resultados y calcular PCA por mes
+        reporte = []
+        for item in resultados_agrupados:
+            planificado = item['total_planificado']
+            cumplido = item['total_cumplido_adherencia']
+            
+            # Cálculo del PCA mensual
+            pca_mensual = (cumplido / planificado * 100) if planificado > 0 else 0.0
+            
+            reporte.append({
+                "mes": item['mes_reporte'].strftime('%Y-%m'), 
+                "total_planificado": round(planificado, 2),
+                "total_cumplido_adherencia": round(cumplido, 2),
+                "pca_mensual": round(pca_mensual, 2)
+            })
+            
+        return Response(reporte)
+    
+class ReporteCumplimientoPlanSemanal(APIView):
+    """
+    API para calcular el Porcentaje de Cumplimiento de Adherencia (PCA) agrupado por semana.
+    """
+    def get(self, request, *args, **kwargs):
+        fecha_desde, fecha_hasta = parsear_fechas(request)
+        
+        if fecha_desde is None or fecha_hasta is None:
+            return Response({"error": "Debe proporcionar fechas válidas (desde, hasta) en formato YYYY-MM-DD."}, status=400)
+
+        # 1. ANOTAR LAS OTs con la semana y si cumplió la fecha programada
+        ots_base = OrdenDeTrabajo.objects.filter(
+            hora_inicio_programada__range=(fecha_desde, fecha_hasta),
+        ).annotate(
+            # Campo para agrupar: Trunca a la fecha de inicio de la semana
+            semana_reporte=TruncWeek('hora_inicio_programada'),
+            
+            # Campos para verificar cumplimiento
+            dia_fin_real=F('hora_fin_real__date'),
+            dia_fin_programado=F('hora_fin_programada__date')
+        ).annotate(
+            cumplio_fecha=Case(
+                When(
+                    # Criterio de cumplimiento: Día de fin real <= Día de fin programado
+                    dia_fin_real__lte=F('dia_fin_programado'), 
+                    # El estado debe ser 'Completada' y la hora_fin_real no nula
+                    id_estado_orden_trabajo__descripcion='Completada',
+                    hora_fin_real__isnull=False,
+                    then=Value(True)
+                ),
+                default=Value(False),
+                output_field=BooleanField()
+            )
+        )
+        
+        # 2. AGREGAR Y AGRUPAR POR SEMANA
+        resultados_agrupados = ots_base.values('semana_reporte').annotate(
+            # Denominador: Total planificado para esa semana
+            total_planificado=Coalesce(Sum('cantidad_programada'), Value(0.0), output_field=FloatField()),
+            
+            # Numerador: Suma de la cantidad_programada SOLO de las que cumplieron
+            total_cumplido_adherencia=Coalesce(
+                Sum(
+                    Case(
+                        When(cumplio_fecha=True, then='cantidad_programada'),
+                        default=Value(0),
+                        output_field=FloatField()
+                    )
+                ), 
+                Value(0.0),
+                output_field=FloatField()
+            )
+        ).order_by('semana_reporte')
+        
+        # 3. Formatear resultados y calcular PCA por semana
+        reporte = []
+        for item in resultados_agrupados:
+            planificado = item['total_planificado']
+            cumplido = item['total_cumplido_adherencia']
+            
+            # Cálculo del PCA semanal
+            pca_semanal = (cumplido / planificado * 100) if planificado > 0 else 0.0
+            
+            # El resultado de TruncWeek es un objeto datetime, lo formateamos a YYYY-MM-DD (fecha de inicio de la semana)
+            reporte.append({
+                "semana_inicio": item['semana_reporte'].strftime('%Y-%m-%d'),
+                "total_planificado": round(planificado, 2),
+                "total_cumplido_adherencia": round(cumplido, 2),
+                "pca_semanal": round(pca_semanal, 2)
+            })
+            
+        return Response(reporte)
     
 class LineasProduccionYEstado(APIView):
     """

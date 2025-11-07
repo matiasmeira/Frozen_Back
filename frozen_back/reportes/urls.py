@@ -33,6 +33,14 @@ urlpatterns = [
          views.ReporteCumplimientoPlan.as_view(), 
          name='reporte-cumplimiento-plan'),
 
+     path('produccion/cumplimiento-mensual/', 
+         views.ReporteCumplimientoPlanMensual.as_view(), 
+         name='reporte-cumplimiento-mensual'),
+
+     path('produccion/cumplimiento-semanal/', 
+        views.ReporteCumplimientoPlanSemanal.as_view(), 
+        name='reporte_cumplimiento_semanal'),
+
      path('produccion/lineas-produccion/', 
          views.LineasProduccionYEstado.as_view(), 
          name='reporte-lineas-produccion'),
