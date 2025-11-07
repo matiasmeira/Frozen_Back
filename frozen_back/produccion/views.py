@@ -1,4 +1,4 @@
-from django.shortcuts import render
+from django.shortcuts import get_object_or_404, render
 from rest_framework import viewsets, filters, serializers as drf_serializers, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -7,7 +7,7 @@ from django.db import transaction
 from produccion.services import gestionar_reservas_para_orden_produccion, descontar_stock_reservado, calcular_porcentaje_desperdicio_historico, verificar_y_actualizar_op_segun_ots
 from recetas.models import Receta, RecetaMateriaPrima
 from productos.models import Producto
-from .models import EstadoOrdenProduccion, LineaProduccion, OrdenProduccion, NoConformidad, estado_linea_produccion, OrdenDeTrabajo
+from .models import EstadoOrdenProduccion, EstadoOrdenTrabajo, LineaProduccion, OrdenProduccion, NoConformidad, PausaOT, estado_linea_produccion, OrdenDeTrabajo
 from stock.models import EstadoLoteMateriaPrima, LoteMateriaPrima, LoteProduccion, EstadoLoteProduccion, LoteProduccionMateria, EstadoReservaMateria, ReservaMateriaPrima
 from .serializers import (
     EstadoOrdenProduccionSerializer,
@@ -49,31 +49,186 @@ class EstadoLineaProduccionViewSet(viewsets.ModelViewSet):
 
 class OrdenDeTrabajoViewSet(viewsets.ModelViewSet):
     """
-    ViewSet para gestionar las Órdenes de Trabajo (los fragmentos).
+    ViewSet para gestionar las Órdenes de Trabajo (los fragmentos) con control de tiempo teórico.
     """
     queryset = OrdenDeTrabajo.objects.all().select_related(
         'id_orden_produccion', 
         'id_linea_produccion', 
         'id_estado_orden_trabajo'
     )
-    serializer_class = OrdenDeTrabajoSerializer # Debes crear este serializer
+    serializer_class = OrdenDeTrabajoSerializer
     
-    # (Añade filtros si los necesitas, similar a tu OPViewSet)
-    
+    # --- UTILITY: Obtener Estado ---
+    def _get_estado(self, descripcion):
+        try:
+            # Implementación REAL: Reemplaza con tu método real para obtener el estado
+            return EstadoOrdenTrabajo.objects.get(descripcion__iexact=descripcion)
+        except Exception as e:
+            raise Exception(f"Estado de OT '{descripcion}' no encontrado.")
+            
+# --- Método perform_update (Mantenido) ---
     def perform_update(self, serializer):
-        """
-        Sobreescribimos 'perform_update' para que actúe como disparador.
-        """
-        # 1. Guarda la OT normalmente
         orden_trabajo = serializer.save()
         
         # 2. Llama a nuestro servicio de verificación
-        #    Le pasamos el ID de la OP "padre"
         if orden_trabajo.id_orden_produccion:
             verificar_y_actualizar_op_segun_ots(
                 orden_trabajo.id_orden_produccion.id_orden_produccion
             )
+            
+    # =================================================================
+    # 1. ACCIÓN INICIAR OT (Registra hora_inicio_real)
+    # =================================================================
+    @action(detail=True, methods=['patch'])
+    @transaction.atomic
+    def iniciar_ot(self, request, pk=None):
+        """ Cambia el estado a 'En Progreso' y registra hora_inicio_real. """
+        ot = get_object_or_404(OrdenDeTrabajo, pk=pk)
+        
+        if ot.id_estado_orden_trabajo.descripcion.lower() not in ['pendiente', 'planificada']:
+            return Response(
+                {'error': 'La OT debe estar en estado Pendiente o Planificada para iniciar.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
+        nuevo_estado = self._get_estado('En Progreso')
+        
+        ot.hora_inicio_real = timezone.now()
+        ot.id_estado_orden_trabajo = nuevo_estado
+        ot.save()
+        
+        return Response({'message': 'OT iniciada correctamente', 'estado': nuevo_estado.descripcion}, 
+                        status=status.HTTP_200_OK)
+
+
+    # =================================================================
+    # 2. ACCIÓN PAUSAR OT (Registra pausa teórica)
+    # =================================================================
+    @action(detail=True, methods=['post'])
+    @transaction.atomic
+    def pausar_ot(self, request, pk=None):
+        """ Crea una PausaOT activa y cambia el estado a 'En Pausa'. """
+        ot = get_object_or_404(OrdenDeTrabajo, pk=pk)
+        motivo = request.data.get('motivo')
+        
+        if ot.id_estado_orden_trabajo.descripcion.lower() != 'en progreso':
+            return Response({'error': 'La OT debe estar en estado "En Progreso" para pausar.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if not motivo:
+            return Response({'error': 'El motivo de la pausa es obligatorio.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if ot.pausas.filter(activa=True).exists():
+             return Response({'error': 'Ya existe una pausa activa. Debe reanudar primero.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        PausaOT.objects.create(
+            id_orden_trabajo=ot,
+            motivo=motivo,
+            activa=True,
+            duracion_minutos=0 
+        )
+        
+        nuevo_estado = self._get_estado('En Pausa')
+        ot.id_estado_orden_trabajo = nuevo_estado
+        ot.save()
+
+        return Response({'message': 'OT pausada correctamente'}, status=status.HTTP_200_OK)
+
+    
+    # =================================================================
+    # 3. ACCIÓN REANUDAR OT (Define Duración Teórica y Finaliza Pausa)
+    # =================================================================
+    @action(detail=True, methods=['patch'])
+    @transaction.atomic
+    def reanudar_ot(self, request, pk=None):
+        """ 
+        Finaliza la PausaOT activa, asignando la duración teórica provista por el usuario.
+        """
+        ot = get_object_or_404(OrdenDeTrabajo, pk=pk)
+        
+        duracion_pausa_teorica = request.data.get('duracion_minutos', 0)
+        
+        if ot.id_estado_orden_trabajo.descripcion.lower() != 'en pausa':
+            return Response({'error': 'La OT debe estar en estado "En Pausa" para reanudar.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            duracion = int(duracion_pausa_teorica)
+            if duracion < 0: raise ValueError
+        except ValueError:
+             return Response({'error': 'La duración de la pausa debe ser un número entero positivo.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            ultima_pausa = ot.pausas.get(activa=True)
+            
+            ultima_pausa.duracion_minutos = duracion 
+            ultima_pausa.activa = False
+            ultima_pausa.save()
+            
+        except PausaOT.DoesNotExist:
+            return Response({'error': 'No hay pausas activas para reanudar.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        nuevo_estado = self._get_estado('En Progreso')
+        ot.id_estado_orden_trabajo = nuevo_estado
+        ot.save()
+
+        return Response({
+            'message': f'OT reanudada. Pausa registrada con duración de {duracion} minutos.',
+            'estado': nuevo_estado.descripcion
+        }, status=status.HTTP_200_OK)
+
+
+    # =================================================================
+    # 4. ACCIÓN FINALIZAR OT (Calcula duración planificada en el momento)
+    # =================================================================
+    @action(detail=True, methods=['patch'])
+    @transaction.atomic
+    def finalizar_ot(self, request, pk=None):
+        """ 
+        Cambia el estado a 'Completada', calcula hora_fin_real (tiempo teórico + pausas). 
+        """
+        ot = get_object_or_404(OrdenDeTrabajo, pk=pk)
+        
+        # Validaciones
+        if ot.id_estado_orden_trabajo.descripcion.lower() != 'en progreso':
+            return Response({'error': 'La OT debe estar en estado "En Progreso" para finalizar.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not ot.hora_inicio_real:
+            return Response({'error': 'La OT no tiene hora de inicio real registrada.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 1. Validar Pausas Activas
+        if ot.pausas.filter(activa=True).exists():
+             return Response({'error': 'No se puede finalizar. Hay una pausa activa que debe ser reanudada.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 2. CALCULAR LA DURACIÓN PLANIFICADA EN MINUTOS (CORRECCIÓN DEL ERROR)
+        if not ot.hora_fin_programada or not ot.hora_inicio_programada:
+             return Response({'error': 'La OT no tiene un horario planificado completo (inicio/fin).'}, status=status.HTTP_400_BAD_REQUEST)
+             
+        # Diferencia entre hora fin planificada y hora inicio planificada
+        duracion_planificada_delta = ot.hora_fin_programada - ot.hora_inicio_programada
+        
+        # Convertir el objeto timedelta a minutos totales
+        duracion_planificada_minutos = duracion_planificada_delta.total_seconds() / 60
+        
+        # 3. Sumar el tiempo total de pausas (Solo suma las no activas)
+        tiempo_pausa_total_minutos = ot.pausas.filter(activa=False).aggregate(
+            total_pausa=Sum('duracion_minutos')
+        )['total_pausa'] or 0
+        
+        # 4. Calcular hora_fin_real
+        # tiempo_operacion_total = Duración Planificada + Tiempo de Pausa Registrado
+        tiempo_operacion_total = duracion_planificada_minutos + tiempo_pausa_total_minutos
+        
+        # hora_fin_real = hora_inicio_real + tiempo_operacion_total
+        ot.hora_fin_real = ot.hora_inicio_real + timedelta(minutes=tiempo_operacion_total)
+
+        # 5. Actualizar estado y guardar
+        nuevo_estado = self._get_estado('Completada')
+        ot.id_estado_orden_trabajo = nuevo_estado
+        ot.save()
+        
+        # 6. Llama al servicio de verificación de OP padre
+        if ot.id_orden_produccion:
+             verificar_y_actualizar_op_segun_ots(ot.id_orden_produccion.id_orden_produccion)
+
+        return Response({'message': 'OT finalizada correctamente'}, status=status.HTTP_200_OK)
 
 
 #V2
