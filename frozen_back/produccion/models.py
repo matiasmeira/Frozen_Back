@@ -153,4 +153,21 @@ class OrdenDeTrabajo(models.Model):
         return f"OT-{self.id_orden_trabajo} (OP: {self.id_orden_produccion.id_orden_produccion})"
     
 
+class PausaOT(models.Model):
+    id_pausa = models.AutoField(primary_key=True)
+    id_orden_trabajo = models.ForeignKey(
+        OrdenDeTrabajo, 
+        on_delete=models.CASCADE, 
+        related_name="pausas"
+    )
+    motivo = models.CharField(max_length=255)
     
+    # Campo para registrar la duración teórica de la pausa
+    duracion_minutos = models.IntegerField(default=0) 
+    
+    # Campo para saber si está activa (pendiente de finalización)
+    # Usamos un booleano en lugar de la hora_fin.
+    activa = models.BooleanField(default=True) 
+
+    class Meta:
+        db_table = "pausa_orden_trabajo"
