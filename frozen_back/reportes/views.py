@@ -5,14 +5,15 @@ from django.db.models import Sum, F, Count
 from django.db.models.functions import TruncDate, TruncMonth
 from datetime import datetime, timedelta # Asegúrate de importar timedelta si usas el helper
 
+
 # --- ¡IMPORTANTE! ---
 # Ahora importas los modelos desde sus apps correspondientes
 from produccion.models import OrdenDeTrabajo, NoConformidad, EstadoOrdenTrabajo, LineaProduccion, estado_linea_produccion
 from stock.models import LoteProduccionMateria
 from productos.models import Producto
 from materias_primas.models import MateriaPrima
-from django.db.models import Sum, F, Count, Value, CharField, FloatField
-from django.db.models.functions import TruncDate, Coalesce
+from django.db.models import Sum, F, Count, Value, CharField, FloatField, Q, DateField, Case, When, BooleanField
+from django.db.models.functions import TruncDate, Coalesce, Cast
 
 from django.utils import timezone
 
@@ -290,54 +291,66 @@ class ReporteTasaDeDesperdicio(APIView):
 
 class ReporteCumplimientoPlan(APIView):
     """
-    API para calcular el Porcentaje de Cumplimiento del Plan (PCP).
-    PCP = (Total Producido / Total Planificado) * 100
+    API para calcular el Porcentaje de Cumplimiento de Adherencia (PCA) por Cantidad (Volumen).
     """
     def get(self, request, *args, **kwargs):
-        fecha_desde, fecha_hasta = parsear_fechas(request)
-        if fecha_desde is None:
-            return Response({"error": "Formato de fecha inválido. Usar YYYY-MM-DD."}, status=400)
-
+        fecha_desde, fecha_hasta = parsear_fechas(request) 
+        
+        if fecha_desde is None or fecha_hasta is None:
+            return Response({"error": "Debe proporcionar fechas válidas (desde, hasta) en formato YYYY-MM-DD."}, status=400)
+        
         # 1. CALCULAR EL TOTAL PLANIFICADO (DENOMINADOR)
         total_planificado_query = OrdenDeTrabajo.objects.filter(
             hora_inicio_programada__range=(fecha_desde, fecha_hasta)
         ).aggregate(
-            total_planificado=Coalesce(
-                Sum('cantidad_programada'), 
-                Value(0.0), 
-                output_field=FloatField() # Soluciona FieldError
-            )
+            total_planificado=Coalesce(Sum('cantidad_programada'), Value(0.0), output_field=FloatField())
         )
         total_planificado = total_planificado_query.get('total_planificado', 0.0)
 
-        # 2. CALCULAR EL TOTAL REAL PRODUCIDO (NUMERADOR)
-        # Se filtra por la descripción del estado (relación de clave foránea)
-        total_producido_query = OrdenDeTrabajo.objects.filter(
-            hora_inicio_programada__range=(fecha_desde, fecha_hasta),
-            # ¡CORRECCIÓN del FieldError! Usamos la relación para filtrar por el nombre del estado
-            id_estado_orden_trabajo__descripcion='Completada' 
-        ).aggregate(
-            total_producido=Coalesce(
-                Sum('cantidad_producida'), 
-                Value(0.0),
-                output_field=FloatField() # Soluciona FieldError
+        # 2. CALCULAR LA CANTIDAD CUMPLIDA A TIEMPO (NUMERADOR)
+        ots_anotadas = OrdenDeTrabajo.objects.filter(
+            hora_inicio_programada__range=(fecha_desde, fecha_hasta) 
+        ).annotate(
+            dia_fin_real=F('hora_fin_real__date'),
+            dia_fin_programado=F('hora_fin_programada__date')
+        ).annotate(
+            cumplio_fecha=Case(
+                When(
+                    dia_fin_real=F('dia_fin_programado'),
+                    then=Value(True)
+                ),
+                default=Value(False),
+                output_field=BooleanField()
             )
         )
-        total_producido = total_producido_query.get('total_producido', 0.0)
-
-        # 3. CÁLCULO DEL PCP
-        pcp = 0.0
         
-        if total_planificado > 0:
-            pcp = (total_producido / total_planificado) * 100.0
+        total_cumplido_query = ots_anotadas.filter(
+            cumplio_fecha=True, 
+            id_estado_orden_trabajo__descripcion='Completada', 
+            hora_fin_real__isnull=False, 
+        ).aggregate(
+            total_cumplido_adherencia=Coalesce(
+                Sum('cantidad_programada'), 
+                Value(0.0),
+                output_field=FloatField()
+            )
+        )
+        total_cumplido = total_cumplido_query.get('total_cumplido_adherencia', 0.0)
 
-        # 4. PREPARAR RESPUESTA
+        # 3. CÁLCULO DEL PCA y Respuesta
+        pcp = 0.0
+        if total_planificado > 0:
+            pcp = (total_cumplido / total_planificado) * 100.0
+
+        # CORRECCIÓN DE ERROR: Usar timedelta directamente
+        fecha_fin_respuesta = (fecha_hasta - timedelta(days=1)).strftime('%Y-%m-%d')
+        
         resultado = {
             "fecha_desde": fecha_desde.strftime('%Y-%m-%d'),
-            "fecha_hasta": fecha_hasta.strftime('%Y-%m-%d'),
+            "fecha_hasta": fecha_fin_respuesta,
             "total_planificado": total_planificado,
-            "total_producido": total_producido,
-            "porcentaje_cumplimiento_plan": round(pcp, 2)
+            "total_cantidad_cumplida_a_tiempo": total_cumplido,
+            "porcentaje_cumplimiento_adherencia": round(pcp, 2)
         }
 
         return Response(resultado)
