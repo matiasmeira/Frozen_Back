@@ -250,15 +250,31 @@ class ReporteDesperdicioPorProducto(APIView):
     
 
 class ReporteTasaDeDesperdicio(APIView):
-
+    """
+    Calcula la Tasa de Desperdicio (Total Desperdiciado / Total Programado de OTs Completadas)
+    basándose ÚNICAMENTE en las Órdenes de Trabajo que han sido Completadas.
+    """
     def get(self, request, *args, **kwargs):
         fecha_desde, fecha_hasta = parsear_fechas(request)
         if fecha_desde is None:
             return Response({"error": "Formato de fecha inválido. Usar YYYY-MM-DD."}, status=400)
 
+        rango_fecha_filtro = (fecha_desde, fecha_hasta)
+        
+        # --- 0. Definir el conjunto base de OTs Completadas en el rango de fecha ---
+        # Filtramos las OTs que terminaron dentro del rango o que iniciaron en el rango y se completaron
+        ots_completadas = OrdenDeTrabajo.objects.filter(
+            id_estado_orden_trabajo__descripcion='Completada',  # Filtro esencial
+            hora_inicio_programada__range=rango_fecha_filtro
+        )
+
         # 1. CALCULAR EL TOTAL DESPERDICIADO (NUMERADOR)
+        # 🚨 CAMBIO: Filtramos las No Conformidades que pertenecen a las OTs COMPLETADAS
         total_desperdiciado_query = NoConformidad.objects.filter(
-            id_orden_produccion__fecha_creacion__range=(fecha_desde, fecha_hasta)
+            # Filtra las NCs que tienen una OT cuya hora_inicio_programada cae en el rango
+            id_orden_trabajo__hora_inicio_programada__range=rango_fecha_filtro,
+            # Filtra las NCs cuya OT está en estado 'Completada'
+            id_orden_trabajo__id_estado_orden_trabajo__descripcion='Completada' 
         ).aggregate(
             total_desperdiciado=Coalesce(
                 Sum('cant_desperdiciada'), 
@@ -268,10 +284,9 @@ class ReporteTasaDeDesperdicio(APIView):
         )
         total_desperdiciado = total_desperdiciado_query.get('total_desperdiciado', 0.0)
 
-        # 2. CALCULAR EL TOTAL PRODUCIDO/PROGRAMADO (DENOMINADOR)
-        total_producido_query = OrdenDeTrabajo.objects.filter(
-            hora_inicio_programada__range=(fecha_desde, fecha_hasta)
-        ).aggregate(
+        # 2. CALCULAR EL TOTAL PROGRAMADO (DENOMINADOR)
+        # 🚨 CAMBIO: Sumamos SOLO la cantidad programada de las OTs Completadas
+        total_producido_query = ots_completadas.aggregate(
             total_programado=Coalesce(
                 Sum('cantidad_programada'), 
                 Value(0.0),
@@ -280,16 +295,17 @@ class ReporteTasaDeDesperdicio(APIView):
         )
         total_programado = total_producido_query.get('total_programado', 0.0)
         
-        # ... (resto del cálculo de la tasa) ...
+        # 3. CÁLCULO DE LA TASA
         tasa_desperdicio = 0.0
         
         if total_programado > 0:
+            # Tasa de desperdicio = (Desperdiciado total / Programado en OTs completadas) * 100
             tasa_desperdicio = (total_desperdiciado / total_programado) * 100.0
 
         resultado = {
             "fecha_desde": fecha_desde.strftime('%Y-%m-%d'),
             "fecha_hasta": fecha_hasta.strftime('%Y-%m-%d'),
-            "total_programado": total_programado,
+            "total_programado_completado": total_programado,
             "total_desperdiciado": total_desperdiciado,
             "tasa_desperdicio_porcentaje": round(tasa_desperdicio, 2)
         }
