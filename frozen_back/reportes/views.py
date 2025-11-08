@@ -2,7 +2,7 @@ from django.shortcuts import render
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.db.models import Sum, F, Count
-from django.db.models.functions import TruncDate, TruncMonth, TruncWeek, ExtractYear
+from django.db.models.functions import TruncDate, TruncMonth, TruncWeek, ExtractYear, ExtractDay
 from datetime import datetime, timedelta # Asegúrate de importar timedelta si usas el helper
 
 
@@ -12,7 +12,7 @@ from produccion.models import OrdenDeTrabajo, NoConformidad, EstadoOrdenTrabajo,
 from stock.models import LoteProduccionMateria
 from productos.models import Producto
 from materias_primas.models import MateriaPrima
-from django.db.models import Sum, F, Count, Value, CharField, FloatField, Q, DateField, Case, When, BooleanField
+from django.db.models import Sum, F, Count, Value, CharField, FloatField, Q, DateField, Case, When, BooleanField, ExpressionWrapper, DurationField
 from django.db.models.functions import TruncDate, Coalesce, Cast
 
 from django.utils import timezone
@@ -558,29 +558,22 @@ class LineasProduccionYEstado(APIView):
 class ReporteFactorCalidadOEE(APIView):
     """
     API para calcular el Factor de Calidad del OEE.
-    Calidad = ((Total Programado - Total Desperdiciado) / Total Programado) * 100
+    
+    CORRECCIÓN: Se filtra estrictamente para incluir solo las Órdenes de Trabajo
+    que están en estado 'Completada', asegurando que la métrica sea relevante al producto final.
     """
     def get(self, request, *args, **kwargs):
         fecha_desde, fecha_hasta = parsear_fechas(request)
         if fecha_desde is None:
             return Response({"error": "Formato de fecha inválido. Usar YYYY-MM-DD."}, status=400)
 
-        # 1. CALCULAR EL TOTAL DESPERDICIADO (PÉRDIDAS)
-        total_desperdiciado_query = NoConformidad.objects.filter(
-            id_orden_produccion__fecha_creacion__range=(fecha_desde, fecha_hasta)
-        ).aggregate(
-            total_desperdiciado=Coalesce(
-                Sum('cant_desperdiciada'), 
-                Value(0.0), 
-                output_field=FloatField()
-            )
-        )
-        total_desperdiciado = total_desperdiciado_query.get('total_desperdiciado', 0.0)
-
-        # 2. CALCULAR EL TOTAL PROGRAMADO (VOLUMEN)
-        # Lo usamos como el 'Total Producido' en este contexto para el cálculo del ratio.
+        rango_fecha_filtro = (fecha_desde, fecha_hasta)
+        
+        # 1. CALCULAR EL TOTAL PROGRAMADO (VOLUMEN) - Denominador
+        # 🚨 FILTRO CLAVE: Solo OTs que estén 'Completada' y en el rango de fecha
         total_programado_query = OrdenDeTrabajo.objects.filter(
-            hora_inicio_programada__range=(fecha_desde, fecha_hasta)
+            hora_inicio_programada__range=rango_fecha_filtro,
+            id_estado_orden_trabajo__descripcion='Completada' # <--- FILTRO AÑADIDO
         ).aggregate(
             total_programado=Coalesce(
                 Sum('cantidad_programada'), 
@@ -589,6 +582,21 @@ class ReporteFactorCalidadOEE(APIView):
             )
         )
         total_programado = total_programado_query.get('total_programado', 0.0)
+
+        # 2. CALCULAR EL TOTAL DESPERDICIADO (PÉRDIDAS) - Numerador
+        # 🚨 FILTRO CLAVE: Desperdicio de OTs que estén 'Completada' y en el rango
+        total_desperdiciado_query = NoConformidad.objects.filter(
+            # Se usa el campo de la OT relacionada para filtrar por el mismo rango de fechas
+            id_orden_trabajo__hora_inicio_programada__range=rango_fecha_filtro,
+            id_orden_trabajo__id_estado_orden_trabajo__descripcion='Completada' # <--- FILTRO AÑADIDO
+        ).aggregate(
+            total_desperdiciado=Coalesce(
+                Sum('cant_desperdiciada'), 
+                Value(0.0), 
+                output_field=FloatField()
+            )
+        )
+        total_desperdiciado = total_desperdiciado_query.get('total_desperdiciado', 0.0)
 
         # 3. CÁLCULO DEL FACTOR CALIDAD
         factor_calidad = 0.0
@@ -599,14 +607,126 @@ class ReporteFactorCalidadOEE(APIView):
             
             # Factor Calidad = (Piezas Buenas / Total Programado) * 100
             factor_calidad = (piezas_buenas / total_programado) * 100.0
-
+        
         # 4. PREPARAR RESPUESTA
         resultado = {
             "fecha_desde": fecha_desde.strftime('%Y-%m-%d'),
             "fecha_hasta": fecha_hasta.strftime('%Y-%m-%d'),
-            "total_programado": total_programado,
+            "total_programado_completado": total_programado, # Renombrado para claridad
             "total_desperdiciado": total_desperdiciado,
-            "factor_calidad_oee": round(factor_calidad, 2) # Porcentaje del 0 al 100
+            "factor_calidad_oee": round(factor_calidad, 2)
+        }
+
+        return Response(resultado)
+    
+
+class ReporteDisponibilidadAjustada(APIView):
+    """
+    API que calcula el indicador de Disponibilidad Ajustada (Eficacia Operativa).
+    
+    Características clave:
+    1. Ignora el retraso en el inicio.
+    2. Penaliza las pausas/paradas registradas.
+    3. Penaliza al 100% las OTs que terminaron un día después de lo programado.
+    """
+    def get(self, request, *args, **kwargs):
+        fecha_desde, fecha_hasta = parsear_fechas(request)
+        if fecha_desde is None:
+            return Response({"error": "Formato de fecha inválido. Usar YYYY-MM-DD."}, status=400)
+
+        rango_fecha_filtro = (fecha_desde, fecha_hasta)
+        
+        # 1. Conjunto Base: OTs Completadas y con tiempos reales en el rango
+        ots_base = OrdenDeTrabajo.objects.filter(
+            id_estado_orden_trabajo__descripcion='Completada',
+            hora_inicio_real__isnull=False,
+            hora_fin_real__isnull=False,
+            hora_inicio_programada__range=rango_fecha_filtro
+        )
+        
+        # 2. Anotar el Tiempo de Carga Ajustado y el indicador de penalización
+        ots_anotadas = ots_base.annotate(
+            # 2.1. Tiempo de Carga Ajustado (Tiempo Transcurrido Bruto)
+            tiempo_carga_ajustado_td=ExpressionWrapper(
+                F('hora_fin_real') - F('hora_inicio_real'),
+                output_field=DurationField()
+            ),
+            
+            # 2.2. Diferencia de Fechas (DurationField)
+            retraso_fecha_td=ExpressionWrapper(
+                F('hora_fin_real__date') - F('hora_fin_programada__date'),
+                output_field=DurationField()
+            ),
+            
+        ).annotate(
+            # 🚨 CORRECCIÓN: Indicador de Tarde: Verificamos si la duración es mayor a 0 segundos (es decir, al menos 1 día)
+            termino_tarde=Case(
+                When(
+                    # Filtra directamente sobre la Duración, que es un objeto seguro para comparación > 0 segundos
+                    retraso_fecha_td__gt=timedelta(seconds=0), 
+                    then=Value(True)
+                ),
+                default=Value(False),
+                output_field=BooleanField()
+            )
+        )
+
+        # 3. Agregación de Totales (Sumas)
+        reporte_agregado = ots_anotadas.aggregate(
+            # 3.1. Total de Pausas (Pérdidas por Paradas) en minutos
+            total_perdida_pausas_minutos=Coalesce(
+                Sum('pausas__duracion_minutos'),
+                Value(0),
+                output_field=FloatField()
+            ),
+            
+            # 3.2. Suma del Tiempo de Carga Ajustado Total (Denominador Bruto) en segundos
+            total_tiempo_carga_segundos=Coalesce(
+                Sum(F('tiempo_carga_ajustado_td')),
+                Value(timedelta(0)),
+                output_field=DurationField()
+            ),
+            
+            # 3.3. TIEMPO PERDIDO POR DISCIPLINIDAD DE FECHA (Penalización al 100% de la OT tardía)
+            total_penalizado_tarde_segundos=Coalesce(
+                Sum(
+                    Case(
+                        When(termino_tarde=True, then='tiempo_carga_ajustado_td'),
+                        default=Value(timedelta(0)),
+                        output_field=DurationField()
+                    )
+                ),
+                Value(timedelta(0)),
+                output_field=DurationField()
+            )
+        )
+
+        # 4. Cálculo final y Conversión a Minutos
+        total_tiempo_carga_segundos = reporte_agregado['total_tiempo_carga_segundos'].total_seconds()
+        total_tiempo_carga_minutos = total_tiempo_carga_segundos / 60.0
+        
+        total_perdida_pausas = reporte_agregado['total_perdida_pausas_minutos']
+        total_penalizado_tarde = reporte_agregado['total_penalizado_tarde_segundos'].total_seconds() / 60.0
+
+        # Pérdidas Totales = Pausas + Penalización por Tarde
+        perdidas_totales = total_perdida_pausas + total_penalizado_tarde
+
+        # Tiempo Operación Neto = Tiempo Carga Bruto - Pérdidas Totales
+        tiempo_operacion_neto = total_tiempo_carga_minutos - perdidas_totales
+        
+        # Tasa de Disponibilidad Ajustada
+        disponibilidad_ajustada = 0.0
+        if total_tiempo_carga_minutos > 0:
+            disponibilidad_ajustada = (tiempo_operacion_neto / total_tiempo_carga_minutos) * 100.0
+            
+        resultado = {
+            "fecha_desde": fecha_desde.strftime('%Y-%m-%d'),
+            "fecha_hasta": fecha_hasta.strftime('%Y-%m-%d'),
+            "total_tiempo_ejecucion_minutos": round(total_tiempo_carga_minutos, 2),
+            "total_tiempo_perdido_pausas_minutos": round(total_perdida_pausas, 2),
+            "total_penalizado_por_fecha_minutos": round(total_penalizado_tarde, 2),
+            "total_tiempo_operacion_neto_minutos": round(tiempo_operacion_neto, 2),
+            "disponibilidad_ajustada_porcentaje": round(disponibilidad_ajustada, 2)
         }
 
         return Response(resultado)

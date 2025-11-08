@@ -48,4 +48,8 @@ urlpatterns = [
      path('oee/calidad/', 
          views.ReporteFactorCalidadOEE.as_view(), 
          name='reporte-calidad-oee'),
+
+     path('oee/disponibilidad/', 
+         views.ReporteDisponibilidadAjustada.as_view(), 
+         name='reporte-disponibilidad-oee'),
 ]
