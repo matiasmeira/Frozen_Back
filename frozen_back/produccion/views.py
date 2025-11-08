@@ -242,7 +242,7 @@ class OrdenDeTrabajoViewSet(viewsets.ModelViewSet):
         # =================================================================
 
         # 4.1. Sumar el desperdicio total registrado en las No Conformidades de esta OT
-        total_desperdicio_query = ot.noconformidad_set.aggregate(
+        total_desperdicio_query = ot.no_conformidades.aggregate(
             total_desperdicio=Sum('cant_desperdiciada')
         )
         # Coalesce: Si no hay desperdicio (la suma es None), se considera 0
@@ -540,7 +540,10 @@ class OrdenProduccionViewSet(viewsets.ModelViewSet):
 # ViewSet de NoConformidad
 # ------------------------------
 class NoConformidadViewSet(viewsets.ModelViewSet):
-    queryset = NoConformidad.objects.all().select_related("id_orden_produccion","id_tipo_no_conformidad")
+    queryset = NoConformidad.objects.all().select_related(
+        "id_orden_trabajo", 
+        "id_tipo_no_conformidad"
+    )
     serializer_class = NoConformidadSerializer
 
 
