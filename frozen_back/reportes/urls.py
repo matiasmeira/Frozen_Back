@@ -54,8 +54,12 @@ urlpatterns = [
          name='reporte-disponibilidad-oee'),
 
      path('oee/rendimiento/', 
-         views.ReporteFactorRendimientoOEE.as_view(), 
+         views.ReporteFactorRendimientoOEE.as_view(),
          name='reporte-rendimiento-oee'),
+
+    path('oee/', 
+         views.ReporteOEEGeneral.as_view(),
+         name='reporte-oee'),
 
 
          

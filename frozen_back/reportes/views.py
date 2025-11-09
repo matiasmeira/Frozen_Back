@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from django.db.models import Sum, F, Count, fields, Subquery, OuterRef
 from django.db.models.functions import TruncDate, TruncMonth, TruncWeek, ExtractYear, ExtractDay
 from datetime import datetime, timedelta # Asegúrate de importar timedelta si usas el helper
-
+from dateutil.relativedelta import relativedelta
 
 # --- ¡IMPORTANTE! ---
 # Ahora importas los modelos desde sus apps correspondientes
@@ -556,89 +556,169 @@ class LineasProduccionYEstado(APIView):
         """
         return Response(list(lineas))
     
-class ReporteFactorCalidadOEE(APIView):
-    """
-    API para calcular el Factor de Calidad del OEE.
-    
-    AHORA UTILIZA: Producción Bruta (la cantidad total fabricada) como el volumen total.
-    """
-    def get(self, request, *args, **kwargs):
-        fecha_desde, fecha_hasta = parsear_fechas(request)
-        if fecha_desde is None:
-            return Response({"error": "Formato de fecha inválido. Usar YYYY-MM-DD."}, status=400)
+# ====================================================================
+# 1. FACTOR DE CALIDAD
+# ====================================================================
 
+class ReporteFactorCalidadOEE(APIView):
+    """ API para calcular el Factor de Calidad del OEE (Producción Bruta - Desperdicio). """
+    
+    def _calculate_factor_calidad(self, fecha_desde, fecha_hasta):
         rango_fecha_filtro = (fecha_desde, fecha_hasta)
         
-        # 1. CALCULAR LA PRODUCCIÓN BRUTA TOTAL (VOLUMEN REAL) - Denominador
-        # Filtra OTs completadas y en el rango, y suma el campo 'produccion_bruta'.
+        # 1. CALCULAR LA PRODUCCIÓN BRUTA TOTAL (VOLUMEN REAL)
         produccion_bruta_total_query = OrdenDeTrabajo.objects.filter(
             hora_inicio_programada__range=rango_fecha_filtro,
             id_estado_orden_trabajo__descripcion='Completada'
         ).aggregate(
-            produccion_bruta_total=Coalesce(
-                Sum('produccion_bruta'),  # ⬅️ CAMBIO CLAVE: Usamos el nuevo campo
-                Value(0.0),
-                output_field=FloatField()
-            )
+            produccion_bruta_total=Coalesce(Sum('produccion_bruta'), Value(0.0), output_field=FloatField())
         )
         produccion_bruta_total = produccion_bruta_total_query.get('produccion_bruta_total', 0.0)
 
-        # 2. CALCULAR EL TOTAL DESPERDICIADO (PÉRDIDAS) - Numerador (Mantenido)
-        # Filtra el desperdicio asociado a OTs completadas en el rango.
+        # 2. CALCULAR EL TOTAL DESPERDICIADO (PÉRDIDAS)
         total_desperdiciado_query = NoConformidad.objects.filter(
             id_orden_trabajo__hora_inicio_programada__range=rango_fecha_filtro,
             id_orden_trabajo__id_estado_orden_trabajo__descripcion='Completada'
         ).aggregate(
-            total_desperdiciado=Coalesce(
-                Sum('cant_desperdiciada'), 
-                Value(0.0), 
-                output_field=FloatField()
-            )
+            total_desperdiciado=Coalesce(Sum('cant_desperdiciada'), Value(0.0), output_field=FloatField())
         )
         total_desperdiciado = total_desperdiciado_query.get('total_desperdiciado', 0.0)
 
-        # 3. CÁLCULO DEL FACTOR CALIDAD
+        # 3. CÁLCULO DEL FACTOR CALIDAD (Factor puro: 0.0 a 1.0)
         factor_calidad = 0.0
-        # 🛑 CORRECCIÓN: Inicializar la variable aquí para que siempre exista.
-        piezas_buenas_seguro = 0.0 
         
         if produccion_bruta_total > 0:
-            # Piezas Buenas = Producción Bruta Total - Total Desperdiciado
             piezas_buenas = produccion_bruta_total - total_desperdiciado
-            
-            # Se calcula la versión segura dentro del IF
             piezas_buenas_seguro = max(0, piezas_buenas) 
-            
-            # Factor Calidad = (Piezas Buenas / Producción Bruta Total) * 100
-            factor_calidad = (piezas_buenas_seguro / produccion_bruta_total) * 100.0
+            factor_calidad = (piezas_buenas_seguro / produccion_bruta_total)
         
-        # 4. PREPARAR RESPUESTA
-        resultado = {
-            "fecha_desde": fecha_desde.strftime('%Y-%m-%d'),
-            "fecha_hasta": fecha_hasta.strftime('%Y-%m-%d'),
+        return factor_calidad, {
             "produccion_bruta_total": produccion_bruta_total,
             "total_desperdiciado": total_desperdiciado,
-            "piezas_buenas_calculadas": piezas_buenas_seguro, # <--- Ahora la variable existe
-            "factor_calidad_oee": round(factor_calidad, 2)
         }
-
-        return Response(resultado)
-    
-
-class ReporteDisponibilidadAjustada(APIView):
-    """
-    API que calcula el indicador de Disponibilidad Ajustada (Eficacia Operativa).
-    
-    Características clave:
-    1. Ignora el retraso en el inicio.
-    2. Penaliza las pausas/paradas registradas.
-    3. Penaliza al 100% las OTs que terminaron un día después de lo programado.
-    """
+        
     def get(self, request, *args, **kwargs):
         fecha_desde, fecha_hasta = parsear_fechas(request)
         if fecha_desde is None:
             return Response({"error": "Formato de fecha inválido. Usar YYYY-MM-DD."}, status=400)
+            
+        factor_calidad, data = self._calculate_factor_calidad(fecha_desde, fecha_hasta)
+        
+        resultado = {
+            "fecha_desde": fecha_desde.strftime('%Y-%m-%d'),
+            "fecha_hasta": fecha_hasta.strftime('%Y-%m-%d'),
+            "produccion_bruta_total": data['produccion_bruta_total'],
+            "total_desperdiciado": data['total_desperdiciado'],
+            "factor_calidad_oee": round(factor_calidad * 100.0, 2)
+        }
+        return Response(resultado)
 
+# ====================================================================
+# 2. FACTOR DE RENDIMIENTO
+# ====================================================================
+
+class ReporteFactorRendimientoOEE(APIView):
+    """
+    API para calcular el Factor de Rendimiento del OEE, usando el tiempo programado 
+    como denominador y la tasa ideal (cant_por_hora) de ProductoLinea.
+    """
+
+    def _calculate_factor_rendimiento(self, fecha_desde, fecha_hasta):
+        rango_fecha_filtro = (fecha_desde, fecha_hasta)
+        
+        ots_completadas = OrdenDeTrabajo.objects.filter(
+            hora_inicio_programada__range=rango_fecha_filtro,
+            id_estado_orden_trabajo__descripcion='Completada'
+        ).select_related('id_orden_produccion', 'id_linea_produccion')
+
+        if not ots_completadas.exists():
+            return 0.0, {}
+
+        # --- A. CÁLCULO DEL DENOMINADOR: TIEMPO DE FUNCIONAMIENTO (PROGRAMADO) ---
+        tiempo_programado_total_delta = ots_completadas.aggregate(
+            total_delta=Coalesce(
+                Sum(F('hora_fin_programada') - F('hora_inicio_programada')),
+                Value(timedelta(seconds=0)),
+                output_field=fields.DurationField()
+            )
+        )['total_delta']
+
+        tiempo_funcionamiento_minutos = tiempo_programado_total_delta.total_seconds() / 60
+        
+        if tiempo_funcionamiento_minutos <= 0:
+            return 0.0, {"tiempo_funcionamiento_minutos": 0.0, "produccion_bruta_total": 0.0}
+
+        # --- B. CÁLCULO DEL NUMERADOR: TIEMPO DE PRODUCCIÓN IDEAL REQUERIDO ---
+        
+        # Subquery para obtener la tasa ideal (cant_por_hora)
+        tasa_ideal_subquery = ProductoLinea.objects.filter(
+            id_linea_produccion=OuterRef('id_linea_produccion'), 
+            id_producto=OuterRef('id_orden_produccion__id_producto') 
+        ).values('cant_por_hora')[:1] 
+
+        ots_anotadas = ots_completadas.annotate(
+            cant_por_hora_ideal=Subquery(tasa_ideal_subquery, output_field=fields.IntegerField())
+        )
+        
+        ots_con_tiempo_ideal = ots_anotadas.annotate(
+            tiempo_ideal_ot=Case(
+                When(cant_por_hora_ideal__isnull=True, then=Value(0.0)),
+                When(cant_por_hora_ideal__lte=0, then=Value(0.0)),
+                default=ExpressionWrapper(
+                    (F('produccion_bruta') / Cast('cant_por_hora_ideal', FloatField())) * 60,
+                    output_field=FloatField()
+                )
+            )
+        )
+
+        agregacion_ideal = ots_con_tiempo_ideal.aggregate(
+            produccion_ideal_requerida_minutos=Coalesce(Sum('tiempo_ideal_ot'), Value(0.0), output_field=FloatField()),
+            produccion_bruta_total=Coalesce(Sum('produccion_bruta'), Value(0.0), output_field=FloatField())
+        )
+        
+        produccion_ideal_requerida_minutos = agregacion_ideal['produccion_ideal_requerida_minutos']
+        produccion_bruta_total = agregacion_ideal['produccion_bruta_total']
+
+
+        # --- C. CÁLCULO DEL FACTOR RENDIMIENTO (Factor puro: 0.0 a 1.0) ---
+        factor_rendimiento = 0.0
+        if tiempo_funcionamiento_minutos > 0:
+             factor_rendimiento = (produccion_ideal_requerida_minutos / tiempo_funcionamiento_minutos)
+        
+        return factor_rendimiento, {
+            "produccion_bruta_total": produccion_bruta_total,
+            "tiempo_funcionamiento_minutos": tiempo_funcionamiento_minutos,
+            "tiempo_ideal_requerido_minutos": produccion_ideal_requerida_minutos
+        }
+
+    def get(self, request, *args, **kwargs):
+        fecha_desde, fecha_hasta = parsear_fechas(request)
+        if fecha_desde is None:
+            return Response({"error": "Formato de fecha inválido. Usar YYYY-MM-DD."}, status=400)
+            
+        factor_rendimiento, data = self._calculate_factor_rendimiento(fecha_desde, fecha_hasta)
+        
+        resultado = {
+            "fecha_desde": fecha_desde.strftime('%Y-%m-%d'),
+            "fecha_hasta": fecha_hasta.strftime('%Y-%m-%d'),
+            "produccion_bruta_total": data.get("produccion_bruta_total", 0.0),
+            "tiempo_funcionamiento_minutos": round(data.get("tiempo_funcionamiento_minutos", 0.0), 2),
+            "tiempo_ideal_requerido_minutos": round(data.get("tiempo_ideal_requerido_minutos", 0.0), 2),
+            "factor_rendimiento_oee": round(factor_rendimiento * 100.0, 2)
+        }
+        return Response(resultado)
+
+# ====================================================================
+# 3. FACTOR DE DISPONIBILIDAD AJUSTADA
+# ====================================================================
+
+class ReporteDisponibilidadAjustada(APIView):
+    """
+    API que calcula el indicador de Disponibilidad Ajustada (Eficacia Operativa).
+    Utiliza el método original de agregación directa (Sum('pausas__duracion_minutos')).
+    """
+    
+    def _calculate_disponibilidad_ajustada(self, fecha_desde, fecha_hasta):
         rango_fecha_filtro = (fecha_desde, fecha_hasta)
         
         # 1. Conjunto Base: OTs Completadas y con tiempos reales en el rango
@@ -654,34 +734,31 @@ class ReporteDisponibilidadAjustada(APIView):
             # 2.1. Tiempo de Carga Ajustado (Tiempo Transcurrido Bruto)
             tiempo_carga_ajustado_td=ExpressionWrapper(
                 F('hora_fin_real') - F('hora_inicio_real'),
-                output_field=DurationField()
+                output_field=fields.DurationField()
             ),
             
             # 2.2. Diferencia de Fechas (DurationField)
             retraso_fecha_td=ExpressionWrapper(
                 F('hora_fin_real__date') - F('hora_fin_programada__date'),
-                output_field=DurationField()
+                output_field=fields.DurationField()
             ),
             
         ).annotate(
-            # 🚨 CORRECCIÓN: Indicador de Tarde: Verificamos si la duración es mayor a 0 segundos (es decir, al menos 1 día)
+            # Indicador de Tarde: Verificamos si la duración es mayor a 0 segundos
             termino_tarde=Case(
-                When(
-                    # Filtra directamente sobre la Duración, que es un objeto seguro para comparación > 0 segundos
-                    retraso_fecha_td__gt=timedelta(seconds=0), 
-                    then=Value(True)
-                ),
+                When(retraso_fecha_td__gt=timedelta(seconds=0), then=Value(True)), 
                 default=Value(False),
-                output_field=BooleanField()
+                output_field=fields.BooleanField()
             )
         )
 
         # 3. Agregación de Totales (Sumas)
+        # 🚨 USANDO AGREGACIÓN DIRECTA: Sum('pausas__duracion_minutos')
         reporte_agregado = ots_anotadas.aggregate(
             # 3.1. Total de Pausas (Pérdidas por Paradas) en minutos
             total_perdida_pausas_minutos=Coalesce(
-                Sum('pausas__duracion_minutos'),
-                Value(0),
+                Sum('pausas__duracion_minutos'), # ⬅️ USADO TAL CUAL ESTABA
+                Value(0.0), # Usamos 0.0 para consistencia con FloatField
                 output_field=FloatField()
             ),
             
@@ -689,20 +766,20 @@ class ReporteDisponibilidadAjustada(APIView):
             total_tiempo_carga_segundos=Coalesce(
                 Sum(F('tiempo_carga_ajustado_td')),
                 Value(timedelta(0)),
-                output_field=DurationField()
+                output_field=fields.DurationField()
             ),
             
-            # 3.3. TIEMPO PERDIDO POR DISCIPLINIDAD DE FECHA (Penalización al 100% de la OT tardía)
+            # 3.3. TIEMPO PERDIDO POR DISCIPLINIDAD DE FECHA (Penalización)
             total_penalizado_tarde_segundos=Coalesce(
                 Sum(
                     Case(
                         When(termino_tarde=True, then='tiempo_carga_ajustado_td'),
                         default=Value(timedelta(0)),
-                        output_field=DurationField()
+                        output_field=fields.DurationField()
                     )
                 ),
                 Value(timedelta(0)),
-                output_field=DurationField()
+                output_field=fields.DurationField()
             )
         )
 
@@ -719,129 +796,90 @@ class ReporteDisponibilidadAjustada(APIView):
         # Tiempo Operación Neto = Tiempo Carga Bruto - Pérdidas Totales
         tiempo_operacion_neto = total_tiempo_carga_minutos - perdidas_totales
         
-        # Tasa de Disponibilidad Ajustada
+        # Tasa de Disponibilidad Ajustada (Factor puro: 0.0 a 1.0)
         disponibilidad_ajustada = 0.0
         if total_tiempo_carga_minutos > 0:
-            disponibilidad_ajustada = (tiempo_operacion_neto / total_tiempo_carga_minutos) * 100.0
+            # Aseguramos que el factor no sea negativo
+            disponibilidad_ajustada = max(0, tiempo_operacion_neto) / total_tiempo_carga_minutos
             
-        resultado = {
-            "fecha_desde": fecha_desde.strftime('%Y-%m-%d'),
-            "fecha_hasta": fecha_hasta.strftime('%Y-%m-%d'),
-            "total_tiempo_ejecucion_minutos": round(total_tiempo_carga_minutos, 2),
-            "total_tiempo_perdido_pausas_minutos": round(total_perdida_pausas, 2),
-            "total_penalizado_por_fecha_minutos": round(total_penalizado_tarde, 2),
-            "total_tiempo_operacion_neto_minutos": round(tiempo_operacion_neto, 2),
-            "disponibilidad_ajustada_porcentaje": round(disponibilidad_ajustada, 2)
+        # Devolver el factor (0.0 a 1.0) y los datos clave
+        return disponibilidad_ajustada, {
+             "total_tiempo_carga_minutos": total_tiempo_carga_minutos,
+             "total_perdida_pausas": total_perdida_pausas,
+             "total_penalizado_tarde": total_penalizado_tarde
         }
 
-        return Response(resultado)
-    
-class ReporteFactorRendimientoOEE(APIView):
-    """
-    API para calcular el Factor de Rendimiento del OEE, corregido para NO incluir 
-    la duración de las Pausas Mayores en el Tiempo de Funcionamiento (denominador).
-    
-    Denominador = Tiempo de Carga Programado.
-    """
     def get(self, request, *args, **kwargs):
         fecha_desde, fecha_hasta = parsear_fechas(request)
         if fecha_desde is None:
             return Response({"error": "Formato de fecha inválido. Usar YYYY-MM-DD."}, status=400)
-
-        rango_fecha_filtro = (fecha_desde, fecha_hasta)
+            
+        factor_disponibilidad, data = self._calculate_disponibilidad_ajustada(fecha_desde, fecha_hasta)
         
-        # 1. Filtrar las OTs completadas en el rango
-        ots_completadas = OrdenDeTrabajo.objects.filter(
-            hora_inicio_programada__range=rango_fecha_filtro,
-            id_estado_orden_trabajo__descripcion='Completada'
-        ).select_related(
-            'id_orden_produccion', 
-            'id_linea_produccion'
-        )
-
-        if not ots_completadas.exists():
-            return Response({
-                "factor_rendimiento_oee": 0.0,
-                "produccion_bruta_total": 0.0,
-                "tiempo_funcionamiento_minutos": 0.0
-            })
-
-        # --- A. CÁLCULO DEL DENOMINADOR: TIEMPO DE FUNCIONAMIENTO (PROGRAMADO) ---
-        
-        # 1. Calcular la Duración Programada Total (en minutos)
-        # Esto representa el tiempo que la máquina debía estar funcionando, 
-        # excluyendo pausas mayores (que ya deberían estar fuera de este rango programado)
-        tiempo_programado_total_delta = ots_completadas.aggregate(
-            total_delta=Coalesce(
-                Sum(F('hora_fin_programada') - F('hora_inicio_programada')),
-                Value(timedelta(seconds=0)),
-                output_field=fields.DurationField()
-            )
-        )['total_delta']
-
-        tiempo_funcionamiento_minutos = tiempo_programado_total_delta.total_seconds() / 60
-        
-        if tiempo_funcionamiento_minutos <= 0:
-            return Response({"factor_rendimiento_oee": 0.0, "error": "Tiempo de funcionamiento es cero o negativo."}, status=200)
-
-        # --- B. CÁLCULO DEL NUMERADOR: TIEMPO DE PRODUCCIÓN IDEAL REQUERIDO ---
-        
-        # 2. Subquery para obtener la tasa ideal (cant_por_hora)
-        tasa_ideal_subquery = ProductoLinea.objects.filter(
-            id_linea_produccion=OuterRef('id_linea_produccion'), 
-            id_producto=OuterRef('id_orden_produccion__id_producto') 
-        ).values('cant_por_hora')[:1] 
-
-        # 2.1. Anotar la 'cant_por_hora' a cada OT
-        ots_anotadas = ots_completadas.annotate(
-            cant_por_hora_ideal=Subquery(tasa_ideal_subquery, output_field=fields.IntegerField())
-        )
-        
-        # 2.2. Calcular el Tiempo Ideal Requerido: SUM(Producción Bruta / Cant. por Hora Ideal * 60)
-        ots_con_tiempo_ideal = ots_anotadas.annotate(
-            tiempo_ideal_ot=Case(
-                # Si la tasa es 0 o nula, el tiempo ideal es 0 para evitar ZeroDivisionError
-                When(cant_por_hora_ideal__isnull=True, then=Value(0.0)),
-                When(cant_por_hora_ideal__lte=0, then=Value(0.0)),
-                default=ExpressionWrapper(
-                    # (produccion_bruta / cant_por_hora_ideal) * 60 minutos/hora
-                    (F('produccion_bruta') / Cast('cant_por_hora_ideal', FloatField())) * 60,
-                    output_field=FloatField()
-                )
-            )
-        )
-
-        # 2.3. Sumar los resultados
-        agregacion_ideal = ots_con_tiempo_ideal.aggregate(
-            produccion_ideal_requerida_minutos=Coalesce(
-                Sum('tiempo_ideal_ot'),
-                Value(0.0),
-                output_field=FloatField()
-            ),
-            produccion_bruta_total=Coalesce(
-                Sum('produccion_bruta'), 
-                Value(0.0), 
-                output_field=FloatField()
-            )
-        )
-        
-        produccion_ideal_requerida_minutos = agregacion_ideal['produccion_ideal_requerida_minutos']
-        produccion_bruta_total = agregacion_ideal['produccion_bruta_total']
-
-
-        # --- C. CÁLCULO DEL FACTOR RENDIMIENTO ---
-        
-        # Factor Rendimiento = (Tiempo Ideal Requerido / Tiempo de Funcionamiento) * 100
-        factor_rendimiento = (produccion_ideal_requerida_minutos / tiempo_funcionamiento_minutos) * 100.0
-
-        # 3. PREPARAR RESPUESTA
+        # Formato de respuesta para el endpoint individual (como porcentaje)
         resultado = {
             "fecha_desde": fecha_desde.strftime('%Y-%m-%d'),
             "fecha_hasta": fecha_hasta.strftime('%Y-%m-%d'),
-            "produccion_bruta_total": produccion_bruta_total,
-            "tiempo_funcionamiento_minutos": round(tiempo_funcionamiento_minutos, 2), # ⬅️ Renombrado
-            "tiempo_ideal_requerido_minutos": round(produccion_ideal_requerida_minutos, 2),
-            "factor_rendimiento_oee": round(factor_rendimiento, 2)
+            "total_tiempo_ejecucion_minutos": round(data['total_tiempo_carga_minutos'], 2),
+            "total_tiempo_perdido_pausas_minutos": round(data['total_perdida_pausas'], 2),
+            "total_penalizado_por_fecha_minutos": round(data['total_penalizado_tarde'], 2),
+            "disponibilidad_ajustada_porcentaje": round(factor_disponibilidad * 100.0, 2)
         }
-
         return Response(resultado)
+
+# ====================================================================
+# 4. OEE GENERAL
+# ====================================================================
+
+class ReporteOEEGeneral(APIView):
+    def get(self, request, *args, **kwargs):
+        fecha_desde_global, fecha_hasta_global = parsear_fechas(request)
+        if fecha_desde_global is None:
+            return Response({"error": "Fechas inválidas."}, status=400)
+
+        resultados_mensuales = []
+        
+        # Preparamos las instancias de las vistas de factores
+        disponibilidad_view = ReporteDisponibilidadAjustada()
+        rendimiento_view = ReporteFactorRendimientoOEE()
+        calidad_view = ReporteFactorCalidadOEE()
+
+        # Inicializar el bucle mensual
+        fecha_actual_desde = fecha_desde_global
+        
+        while fecha_actual_desde <= fecha_hasta_global:
+            
+            # Calcular el primer día del próximo mes
+            fecha_proximo_mes = fecha_actual_desde + relativedelta(months=1)
+            
+            # Establecer el fin del mes actual (justo antes del inicio del siguiente)
+            fecha_actual_hasta = fecha_proximo_mes - timedelta(seconds=1)
+            
+            # Ajustar la fecha de fin si excede la fecha de fin global
+            if fecha_actual_hasta > fecha_hasta_global:
+                fecha_actual_hasta = fecha_hasta_global
+
+            # 3. Calcular los 3 factores para el MES ACTUAL
+            factor_disponibilidad, _ = disponibilidad_view._calculate_disponibilidad_ajustada(fecha_actual_desde, fecha_actual_hasta)
+            factor_rendimiento, _ = rendimiento_view._calculate_factor_rendimiento(fecha_actual_desde, fecha_actual_hasta)
+            factor_calidad, _ = calidad_view._calculate_factor_calidad(fecha_actual_desde, fecha_actual_hasta)
+
+            # 4. CÁLCULO FINAL DEL OEE
+            factor_oee = factor_disponibilidad * factor_rendimiento * factor_calidad
+            
+            # 5. Guardar el resultado del mes
+            resultados_mensuales.append({
+                "mes": fecha_actual_desde.strftime('%Y-%m'),
+                "disponibilidad": round(factor_disponibilidad * 100.0, 2),
+                "rendimiento": round(factor_rendimiento * 100.0, 2),
+                "calidad": round(factor_calidad * 100.0, 2),
+                "oee_total": round(factor_oee * 100.0, 2),
+            })
+            
+            # 6. Mover al inicio del próximo mes
+            fecha_actual_desde = fecha_proximo_mes
+            
+            if fecha_actual_desde > fecha_hasta_global:
+                break
+        
+        return Response(resultados_mensuales)
