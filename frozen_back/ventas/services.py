@@ -147,6 +147,8 @@ def gestionar_stock_y_estado_para_orden_venta(orden_venta: OrdenVenta):
                         # Asignar un supervisor por defecto si existe alguno (evita que el front falle por ausencia de campo)
                         default_supervisor = Empleado.objects.first()
 
+                        mañana = timezone.localdate() + timedelta(days=1)
+
                         orden_prod = OrdenProduccion.objects.create(
                             cantidad=cantidad_a_producir,
                             id_estado_orden_produccion=estado_en_espera,
@@ -154,6 +156,7 @@ def gestionar_stock_y_estado_para_orden_venta(orden_venta: OrdenVenta):
                             id_orden_venta=orden_venta,
                             #id_linea_produccion=(producto_linea.id_linea_produccion if producto_linea and getattr(producto_linea, 'id_linea_produccion', None) else None),
                             id_supervisor=default_supervisor,
+                            fecha_inicio=mañana, 
                         )
                         print(f"Creada OrdenProduccion #{orden_prod.id_orden_produccion} para producir {cantidad_a_producir} unidades (múltiplo de {cant_por_hora}) asociada a OrdenVenta #{orden_venta.pk}")
 
