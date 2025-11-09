@@ -1,14 +1,15 @@
 from django.shortcuts import render
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from django.db.models import Sum, F, Count
+from django.db.models import Sum, F, Count, fields, Subquery, OuterRef
 from django.db.models.functions import TruncDate, TruncMonth, TruncWeek, ExtractYear, ExtractDay
 from datetime import datetime, timedelta # Asegúrate de importar timedelta si usas el helper
 
 
 # --- ¡IMPORTANTE! ---
 # Ahora importas los modelos desde sus apps correspondientes
-from produccion.models import OrdenDeTrabajo, NoConformidad, EstadoOrdenTrabajo, LineaProduccion, estado_linea_produccion
+from recetas.models import ProductoLinea
+from produccion.models import OrdenDeTrabajo, NoConformidad, EstadoOrdenTrabajo, LineaProduccion, PausaOT, estado_linea_produccion
 from stock.models import LoteProduccionMateria
 from productos.models import Producto
 from materias_primas.models import MateriaPrima
@@ -731,6 +732,116 @@ class ReporteDisponibilidadAjustada(APIView):
             "total_penalizado_por_fecha_minutos": round(total_penalizado_tarde, 2),
             "total_tiempo_operacion_neto_minutos": round(tiempo_operacion_neto, 2),
             "disponibilidad_ajustada_porcentaje": round(disponibilidad_ajustada, 2)
+        }
+
+        return Response(resultado)
+    
+class ReporteFactorRendimientoOEE(APIView):
+    """
+    API para calcular el Factor de Rendimiento del OEE, corregido para NO incluir 
+    la duración de las Pausas Mayores en el Tiempo de Funcionamiento (denominador).
+    
+    Denominador = Tiempo de Carga Programado.
+    """
+    def get(self, request, *args, **kwargs):
+        fecha_desde, fecha_hasta = parsear_fechas(request)
+        if fecha_desde is None:
+            return Response({"error": "Formato de fecha inválido. Usar YYYY-MM-DD."}, status=400)
+
+        rango_fecha_filtro = (fecha_desde, fecha_hasta)
+        
+        # 1. Filtrar las OTs completadas en el rango
+        ots_completadas = OrdenDeTrabajo.objects.filter(
+            hora_inicio_programada__range=rango_fecha_filtro,
+            id_estado_orden_trabajo__descripcion='Completada'
+        ).select_related(
+            'id_orden_produccion', 
+            'id_linea_produccion'
+        )
+
+        if not ots_completadas.exists():
+            return Response({
+                "factor_rendimiento_oee": 0.0,
+                "produccion_bruta_total": 0.0,
+                "tiempo_funcionamiento_minutos": 0.0
+            })
+
+        # --- A. CÁLCULO DEL DENOMINADOR: TIEMPO DE FUNCIONAMIENTO (PROGRAMADO) ---
+        
+        # 1. Calcular la Duración Programada Total (en minutos)
+        # Esto representa el tiempo que la máquina debía estar funcionando, 
+        # excluyendo pausas mayores (que ya deberían estar fuera de este rango programado)
+        tiempo_programado_total_delta = ots_completadas.aggregate(
+            total_delta=Coalesce(
+                Sum(F('hora_fin_programada') - F('hora_inicio_programada')),
+                Value(timedelta(seconds=0)),
+                output_field=fields.DurationField()
+            )
+        )['total_delta']
+
+        tiempo_funcionamiento_minutos = tiempo_programado_total_delta.total_seconds() / 60
+        
+        if tiempo_funcionamiento_minutos <= 0:
+            return Response({"factor_rendimiento_oee": 0.0, "error": "Tiempo de funcionamiento es cero o negativo."}, status=200)
+
+        # --- B. CÁLCULO DEL NUMERADOR: TIEMPO DE PRODUCCIÓN IDEAL REQUERIDO ---
+        
+        # 2. Subquery para obtener la tasa ideal (cant_por_hora)
+        tasa_ideal_subquery = ProductoLinea.objects.filter(
+            id_linea_produccion=OuterRef('id_linea_produccion'), 
+            id_producto=OuterRef('id_orden_produccion__id_producto') 
+        ).values('cant_por_hora')[:1] 
+
+        # 2.1. Anotar la 'cant_por_hora' a cada OT
+        ots_anotadas = ots_completadas.annotate(
+            cant_por_hora_ideal=Subquery(tasa_ideal_subquery, output_field=fields.IntegerField())
+        )
+        
+        # 2.2. Calcular el Tiempo Ideal Requerido: SUM(Producción Bruta / Cant. por Hora Ideal * 60)
+        ots_con_tiempo_ideal = ots_anotadas.annotate(
+            tiempo_ideal_ot=Case(
+                # Si la tasa es 0 o nula, el tiempo ideal es 0 para evitar ZeroDivisionError
+                When(cant_por_hora_ideal__isnull=True, then=Value(0.0)),
+                When(cant_por_hora_ideal__lte=0, then=Value(0.0)),
+                default=ExpressionWrapper(
+                    # (produccion_bruta / cant_por_hora_ideal) * 60 minutos/hora
+                    (F('produccion_bruta') / Cast('cant_por_hora_ideal', FloatField())) * 60,
+                    output_field=FloatField()
+                )
+            )
+        )
+
+        # 2.3. Sumar los resultados
+        agregacion_ideal = ots_con_tiempo_ideal.aggregate(
+            produccion_ideal_requerida_minutos=Coalesce(
+                Sum('tiempo_ideal_ot'),
+                Value(0.0),
+                output_field=FloatField()
+            ),
+            produccion_bruta_total=Coalesce(
+                Sum('produccion_bruta'), 
+                Value(0.0), 
+                output_field=FloatField()
+            )
+        )
+        
+        produccion_ideal_requerida_minutos = agregacion_ideal['produccion_ideal_requerida_minutos']
+        produccion_bruta_total = agregacion_ideal['produccion_bruta_total']
+
+
+        # --- C. CÁLCULO DEL FACTOR RENDIMIENTO ---
+        
+        # Factor Rendimiento = (Tiempo Ideal Requerido / Tiempo de Funcionamiento) * 100
+        factor_rendimiento = (produccion_ideal_requerida_minutos / tiempo_funcionamiento_minutos) * 100.0
+
+        # 3. PREPARAR RESPUESTA
+        resultado = {
+            "fecha_desde": fecha_desde.strftime('%Y-%m-%d'),
+            "fecha_hasta": fecha_hasta.strftime('%Y-%m-%d'),
+            "produccion_bruta_total": produccion_bruta_total,
+            "tiempo_funcionamiento_minutos": round(tiempo_funcionamiento_minutos, 2), # ⬅️ Renombrado
+            "tiempo_ideal_requerido_minutos": round(produccion_ideal_requerida_minutos, 2),
+            "factor_rendimiento_oee": round(factor_rendimiento, 2)
         }
 
         return Response(resultado)
