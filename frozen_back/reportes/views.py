@@ -559,8 +559,7 @@ class ReporteFactorCalidadOEE(APIView):
     """
     API para calcular el Factor de Calidad del OEE.
     
-    CORRECCIÓN: Se filtra estrictamente para incluir solo las Órdenes de Trabajo
-    que están en estado 'Completada', asegurando que la métrica sea relevante al producto final.
+    AHORA UTILIZA: Producción Bruta (la cantidad total fabricada) como el volumen total.
     """
     def get(self, request, *args, **kwargs):
         fecha_desde, fecha_hasta = parsear_fechas(request)
@@ -569,26 +568,25 @@ class ReporteFactorCalidadOEE(APIView):
 
         rango_fecha_filtro = (fecha_desde, fecha_hasta)
         
-        # 1. CALCULAR EL TOTAL PROGRAMADO (VOLUMEN) - Denominador
-        # 🚨 FILTRO CLAVE: Solo OTs que estén 'Completada' y en el rango de fecha
-        total_programado_query = OrdenDeTrabajo.objects.filter(
+        # 1. CALCULAR LA PRODUCCIÓN BRUTA TOTAL (VOLUMEN REAL) - Denominador
+        # Filtra OTs completadas y en el rango, y suma el campo 'produccion_bruta'.
+        produccion_bruta_total_query = OrdenDeTrabajo.objects.filter(
             hora_inicio_programada__range=rango_fecha_filtro,
-            id_estado_orden_trabajo__descripcion='Completada' # <--- FILTRO AÑADIDO
+            id_estado_orden_trabajo__descripcion='Completada'
         ).aggregate(
-            total_programado=Coalesce(
-                Sum('cantidad_programada'), 
+            produccion_bruta_total=Coalesce(
+                Sum('produccion_bruta'),  # ⬅️ CAMBIO CLAVE: Usamos el nuevo campo
                 Value(0.0),
                 output_field=FloatField()
             )
         )
-        total_programado = total_programado_query.get('total_programado', 0.0)
+        produccion_bruta_total = produccion_bruta_total_query.get('produccion_bruta_total', 0.0)
 
-        # 2. CALCULAR EL TOTAL DESPERDICIADO (PÉRDIDAS) - Numerador
-        # 🚨 FILTRO CLAVE: Desperdicio de OTs que estén 'Completada' y en el rango
+        # 2. CALCULAR EL TOTAL DESPERDICIADO (PÉRDIDAS) - Numerador (Mantenido)
+        # Filtra el desperdicio asociado a OTs completadas en el rango.
         total_desperdiciado_query = NoConformidad.objects.filter(
-            # Se usa el campo de la OT relacionada para filtrar por el mismo rango de fechas
             id_orden_trabajo__hora_inicio_programada__range=rango_fecha_filtro,
-            id_orden_trabajo__id_estado_orden_trabajo__descripcion='Completada' # <--- FILTRO AÑADIDO
+            id_orden_trabajo__id_estado_orden_trabajo__descripcion='Completada'
         ).aggregate(
             total_desperdiciado=Coalesce(
                 Sum('cant_desperdiciada'), 
@@ -600,20 +598,26 @@ class ReporteFactorCalidadOEE(APIView):
 
         # 3. CÁLCULO DEL FACTOR CALIDAD
         factor_calidad = 0.0
+        # 🛑 CORRECCIÓN: Inicializar la variable aquí para que siempre exista.
+        piezas_buenas_seguro = 0.0 
         
-        if total_programado > 0:
-            # Piezas Buenas = Total Programado - Total Desperdiciado
-            piezas_buenas = total_programado - total_desperdiciado
+        if produccion_bruta_total > 0:
+            # Piezas Buenas = Producción Bruta Total - Total Desperdiciado
+            piezas_buenas = produccion_bruta_total - total_desperdiciado
             
-            # Factor Calidad = (Piezas Buenas / Total Programado) * 100
-            factor_calidad = (piezas_buenas / total_programado) * 100.0
+            # Se calcula la versión segura dentro del IF
+            piezas_buenas_seguro = max(0, piezas_buenas) 
+            
+            # Factor Calidad = (Piezas Buenas / Producción Bruta Total) * 100
+            factor_calidad = (piezas_buenas_seguro / produccion_bruta_total) * 100.0
         
         # 4. PREPARAR RESPUESTA
         resultado = {
             "fecha_desde": fecha_desde.strftime('%Y-%m-%d'),
             "fecha_hasta": fecha_hasta.strftime('%Y-%m-%d'),
-            "total_programado_completado": total_programado, # Renombrado para claridad
+            "produccion_bruta_total": produccion_bruta_total,
             "total_desperdiciado": total_desperdiciado,
+            "piezas_buenas_calculadas": piezas_buenas_seguro, # <--- Ahora la variable existe
             "factor_calidad_oee": round(factor_calidad, 2)
         }
 
