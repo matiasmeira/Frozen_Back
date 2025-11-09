@@ -61,6 +61,31 @@ urlpatterns = [
          views.ReporteOEEGeneral.as_view(),
          name='reporte-oee'),
 
+    path('ventas/ventas-por-tipo/', 
+         views.ReporteVolumenPorTipo.as_view(),
+         name='ventas-por-tipo'),
 
-         
+    path('ventas/tiempo-ciclo-venta/', 
+         views.ReporteTiempoCicloVenta.as_view(),
+         name='reporte-tiempo-ciclo-venta'),
+
+    path('ventas/cumplimiento-fecha/', 
+         views.ReporteCumplimientoFecha.as_view(),
+         name='ventas-cumplimiento-fecha'),
+
+    path('ventas/total-dinero/', 
+         views.ReporteTotalDineroVentas.as_view(),
+         name='ventas-total-dinero'),
+
+    path('ventas/valor-pedido-promedio/', 
+         views.ReporteValorPedidoPromedio.as_view(),
+         name='ventas-valor-promedio'),
+
+    path('ventas/productos-por-venta/', 
+         views.ReporteProductosPorVenta.as_view(),
+         name='ventas-productos'),
+
+    path('ventas/ventas-por-tipo-producto/', 
+         views.ReporteDistribucionProductoPorTipo.as_view(),
+         name='ventas-por-tipo-producto'),
 ]

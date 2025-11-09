@@ -1,13 +1,15 @@
 from django.shortcuts import render
 from rest_framework.views import APIView
+from rest_framework import status
 from rest_framework.response import Response
-from django.db.models import Sum, F, Count, fields, Subquery, OuterRef
+from django.db.models import Sum, F, Count, fields, Subquery, OuterRef, Avg
 from django.db.models.functions import TruncDate, TruncMonth, TruncWeek, ExtractYear, ExtractDay
 from datetime import datetime, timedelta # Asegúrate de importar timedelta si usas el helper
 from dateutil.relativedelta import relativedelta
 
 # --- ¡IMPORTANTE! ---
 # Ahora importas los modelos desde sus apps correspondientes
+from ventas.models import OrdenVenta, OrdenVentaProducto
 from recetas.models import ProductoLinea
 from produccion.models import OrdenDeTrabajo, NoConformidad, EstadoOrdenTrabajo, LineaProduccion, PausaOT, estado_linea_produccion
 from stock.models import LoteProduccionMateria
@@ -883,3 +885,209 @@ class ReporteOEEGeneral(APIView):
                 break
         
         return Response(resultados_mensuales)
+
+
+# ====================================================================
+# 1. INDICADORES DE VENTAS Y CANALES
+# ====================================================================
+
+class ReporteVolumenPorTipo(APIView):
+    """ Calcula el volumen de ventas (conteo de órdenes) por canal (tipo_venta). """
+    def get(self, request):
+        fecha_desde, fecha_hasta = parsear_fechas(request)
+        if fecha_desde is None:
+            return Response({"error": "Fechas inválidas."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 1. Agrupar por tipo de venta y contar órdenes
+        resultados_agrupados = OrdenVenta.objects.filter(
+            fecha__range=(fecha_desde, fecha_hasta)
+        ).values('tipo_venta').annotate(
+            conteo_ordenes=Sum(Value(1))
+        )
+
+        # 2. Calcular el total global para sacar porcentajes
+        total_global = sum(item['conteo_ordenes'] for item in resultados_agrupados)
+        
+        # 3. Formatear
+        reporte = []
+        for item in resultados_agrupados:
+            porcentaje = (item['conteo_ordenes'] / total_global) * 100 if total_global > 0 else 0.0
+            reporte.append({
+                "tipo_venta": item['tipo_venta'],
+                "ordenes_contadas": item['conteo_ordenes'],
+                "porcentaje": round(porcentaje, 2)
+            })
+
+        return Response(reporte)
+
+
+class ReporteTiempoCicloVenta(APIView):
+    """ Calcula el Tiempo de Ciclo de Venta (Lead Time) promedio para órdenes completadas. """
+    def get(self, request):
+        fecha_desde, fecha_hasta = parsear_fechas(request)
+        if fecha_desde is None:
+            return Response({"error": "Fechas inválidas."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # 1. Calcular el promedio de la duración (fecha_entrega - fecha)
+        # Filtramos solo órdenes completadas que caen en el rango por fecha de creación
+        tiempo_ciclo_agregado = OrdenVenta.objects.filter(
+            fecha__range=(fecha_desde, fecha_hasta),
+            fecha_entrega__isnull=False # Asegura que la orden esté completada
+        ).aggregate(
+            duracion_promedio=Avg(
+                F('fecha_entrega') - F('fecha')
+            )
+        )
+
+        duracion_delta = tiempo_ciclo_agregado.get('duracion_promedio')
+        
+        # 2. Formatear a un valor legible (Ej: días o segundos)
+        promedio_dias = duracion_delta.total_seconds() / (60 * 60 * 24) if duracion_delta else 0.0
+
+        reporte = {
+            "tiempo_ciclo_promedio_dias": round(promedio_dias, 2),
+            "total_ordenes_completadas": OrdenVenta.objects.filter(fecha__range=(fecha_desde, fecha_hasta), fecha_entrega__isnull=False).count()
+        }
+        return Response(reporte)
+
+
+class ReporteCumplimientoFecha(APIView):
+    """ Calcula la Tasa de Cumplimiento de Fecha Estimada (fecha_entrega <= fecha_estimada). """
+    def get(self, request):
+        fecha_desde, fecha_hasta = parsear_fechas(request)
+        if fecha_desde is None:
+            return Response({"error": "Fechas inválidas."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 1. Filtrar solo órdenes con tiempos de cumplimiento relevantes
+        ots_completadas = OrdenVenta.objects.filter(
+            fecha__range=(fecha_desde, fecha_hasta),
+            fecha_entrega__isnull=False,
+            fecha_estimada__isnull=False
+        )
+        
+        total_completadas = ots_completadas.count()
+
+        if total_completadas == 0:
+            return Response({"tasa_cumplimiento": 0.0, "total_ordenes_analizadas": 0})
+        
+        # 2. Contar órdenes que cumplieron la fecha (fecha_entrega <= fecha_estimada)
+        cumplimiento_agregado = ots_completadas.aggregate(
+            ordenes_cumplidas=Sum(
+                Case(
+                    # Nota: Usamos __date para comparar solo la parte de la fecha, ignorando la hora
+                    When(fecha_entrega__date__lte=F('fecha_estimada'), then=Value(1)),
+                    default=Value(0)
+                )
+            )
+        )
+        
+        ordenes_cumplidas = cumplimiento_agregado['ordenes_cumplidas'] or 0
+        tasa_cumplimiento = (ordenes_cumplidas / total_completadas) * 100.0
+
+        reporte = {
+            "tasa_cumplimiento": round(tasa_cumplimiento, 2),
+            "ordenes_cumplidas": ordenes_cumplidas,
+            "total_ordenes_analizadas": total_completadas
+        }
+        return Response(reporte)
+
+# ====================================================================
+# 2. INDICADORES FINANCIEROS Y TRANSACCIONALES
+# ====================================================================
+
+class ReporteTotalDineroVentas(APIView):
+    """ Calcula la Suma Total de Dinero en Ventas. """
+    def get(self, request):
+        fecha_desde, fecha_hasta = parsear_fechas(request)
+        if fecha_desde is None:
+            return Response({"error": "Fechas inválidas."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 1. Calcular la multiplicación de cantidad * precio (asumiendo que OrdenVenta tiene campo 'fecha')
+        total_dinero = OrdenVentaProducto.objects.filter(
+            id_orden_venta__fecha__range=(fecha_desde, fecha_hasta)
+        ).aggregate(
+            total_ventas=Coalesce(
+                Sum(F('cantidad') * F('id_producto__precio')), # Usamos F('id_producto__precio')
+                Value(0.0),
+                output_field=FloatField()
+            )
+        )['total_ventas']
+
+        return Response({
+            "total_dinero_ventas": round(total_dinero, 2)
+        })
+
+
+class ReporteValorPedidoPromedio(APIView):
+    """ Calcula el Valor de Pedido Promedio (AOV). """
+    def get(self, request):
+        # 1. Reutilizamos el cálculo de Suma Total de Dinero en Ventas
+        total_dinero_response = ReporteTotalDineroVentas().get(request).data
+        total_dinero = total_dinero_response.get('total_dinero_ventas', 0.0)
+        
+        # 2. Contar el número total de órdenes
+        fecha_desde, fecha_hasta = parsear_fechas(request)
+        total_ordenes = OrdenVenta.objects.filter(fecha__range=(fecha_desde, fecha_hasta)).count()
+        
+        # 3. Calcular AOV
+        aov = (total_dinero / total_ordenes) if total_ordenes > 0 else 0.0
+
+        return Response({
+            "valor_pedido_promedio": round(aov, 2),
+            "total_ordenes": total_ordenes
+        })
+
+
+class ReporteProductosPorVenta(APIView):
+    """ Calcula la Cantidad Promedio de Productos (unidades) por Venta. """
+    def get(self, request):
+        fecha_desde, fecha_hasta = parsear_fechas(request)
+        if fecha_desde is None:
+            return Response({"error": "Fechas inválidas."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 1. Sumar todas las cantidades de productos vendidos
+        total_unidades = OrdenVentaProducto.objects.filter(
+            id_orden_venta__fecha__range=(fecha_desde, fecha_hasta)
+        ).aggregate(
+            total=Coalesce(Sum('cantidad'), Value(0))
+        )['total']
+        
+        # 2. Contar el número total de órdenes
+        total_ordenes = OrdenVenta.objects.filter(fecha__range=(fecha_desde, fecha_hasta)).count()
+
+        # 3. Calcular promedio
+        promedio = (total_unidades / total_ordenes) if total_ordenes > 0 else 0.0
+
+        return Response({
+            "unidades_promedio_por_venta": round(promedio, 2),
+            "total_unidades_vendidas": total_unidades
+        })
+
+# ====================================================================
+# 3. INDICADORES DE PRODUCTO
+# ====================================================================
+
+class ReporteDistribucionProductoPorTipo(APIView):
+    """ Calcula la Distribución de Productos por Tipo en el catálogo. """
+    def get(self, request):
+        # 1. Agrupar por tipo de producto y contar
+        resultados_agrupados = Producto.objects.values(
+            'id_tipo_producto__descripcion' # Usamos el related name para obtener la descripción
+        ).annotate(
+            conteo=Sum(Value(1))
+        ).order_by('id_tipo_producto__descripcion')
+
+        # 2. Calcular el total global para sacar porcentajes
+        total_global = Producto.objects.count()
+        
+        # 3. Formatear
+        reporte = []
+        for item in resultados_agrupados:
+            porcentaje = (item['conteo'] / total_global) * 100 if total_global > 0 else 0.0
+            reporte.append({
+                "tipo_producto": item['id_tipo_producto__descripcion'],
+                "conteo": item['conteo'],
+                "porcentaje": round(porcentaje, 2)
+            })
+
+        return Response(reporte)
