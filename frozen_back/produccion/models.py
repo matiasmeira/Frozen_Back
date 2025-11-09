@@ -121,6 +121,7 @@ class OrdenDeTrabajo(models.Model):
     hora_inicio_real = models.DateTimeField(null=True, blank=True)
     hora_fin_real = models.DateTimeField(null=True, blank=True)
     cantidad_producida = models.IntegerField(null=True, blank=True)
+    produccion_bruta = models.IntegerField(null=True, blank=True)
 
     history = HistoricalRecords()
 

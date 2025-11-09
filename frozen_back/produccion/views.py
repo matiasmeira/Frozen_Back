@@ -206,10 +206,26 @@ class OrdenDeTrabajoViewSet(viewsets.ModelViewSet):
     def finalizar_ot(self, request, pk=None):
         """ 
         Cambia el estado a 'Completada', calcula hora_fin_real (tiempo teórico + pausas)
-        y establece la cantidad_producida (Programada - Desperdicio).
+        y establece la cantidad_producida (Producción Bruta - Desperdicio).
+        Requiere que se envíe 'produccion_bruta' en el body.
         """
         ot = get_object_or_404(OrdenDeTrabajo, pk=pk)
         
+        # === ⚡ NUEVA LÓGICA: OBTENER Y VALIDAR PRODUCCIÓN BRUTA ===
+        produccion_bruta_ingresada = request.data.get('produccion_bruta')
+        
+        # 0. Validación de Datos (Producción Bruta)
+        try:
+            if produccion_bruta_ingresada is None:
+                raise ValueError('El campo produccion_bruta es obligatorio para finalizar la OT.')
+            
+            produccion_bruta_ingresada = int(produccion_bruta_ingresada)
+            if produccion_bruta_ingresada < 0: 
+                raise ValueError('La producción bruta no puede ser negativa.')
+                
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
         # Validaciones (Mantenidas)
         if ot.id_estado_orden_trabajo.descripcion.lower() != 'en progreso':
             return Response({'error': 'La OT debe estar en estado "En Progreso" para finalizar.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -238,38 +254,47 @@ class OrdenDeTrabajoViewSet(viewsets.ModelViewSet):
 
 
         # =================================================================
-        # ⚡ NUEVA LÓGICA: CALCULAR CANTIDAD PRODUCIDA REAL
+        # ⚡ NUEVA LÓGICA: CALCULAR CANTIDAD PRODUCIDA REAL Y VALIDAR BRUTA
         # =================================================================
 
         # 4.1. Sumar el desperdicio total registrado en las No Conformidades de esta OT
         total_desperdicio_query = ot.no_conformidades.aggregate(
             total_desperdicio=Sum('cant_desperdiciada')
         )
-        # Coalesce: Si no hay desperdicio (la suma es None), se considera 0
         total_desperdicio = total_desperdicio_query.get('total_desperdicio') or 0
 
-        # 4.2. Cantidad Producida = Cantidad Programada - Total Desperdicio
-        cantidad_producida_real = ot.cantidad_programada - total_desperdicio
+        # 4.2. Validación de regla de negocio: Producción Bruta no puede ser menor a Desperdicios
+        if produccion_bruta_ingresada < total_desperdicio:
+            return Response(
+                {'error': f'La producción bruta ingresada ({produccion_bruta_ingresada}) no puede ser menor al desperdicio total registrado ({total_desperdicio}).'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        # 4.3. Calcular Cantidad Producida Neta = Producción Bruta - Total Desperdicio
+        cantidad_producida_real = produccion_bruta_ingresada - total_desperdicio
         
-        # Aseguramos que la cantidad no sea negativa
-        ot.cantidad_producida = max(0, cantidad_producida_real)
+        # 4.4. Asignar valores al modelo
+        ot.produccion_bruta = produccion_bruta_ingresada
+        ot.cantidad_producida = max(0, cantidad_producida_real) # Redundante con la validación, pero seguro.
         
         # =================================================================
 
         # 5. Actualizar estado y guardar (Mantenido)
         nuevo_estado = self._get_estado('Completada')
         ot.id_estado_orden_trabajo = nuevo_estado
-        ot.save() # Se guardan todos los cambios, incluyendo hora_fin_real y cantidad_producida
-        
+        ot.save() # Se guardan todos los cambios
+
         # 6. Llama al servicio de verificación de OP padre (Mantenido)
         if ot.id_orden_produccion:
             verificar_y_actualizar_op_segun_ots(ot.id_orden_produccion.id_orden_produccion)
 
         return Response({
             'message': 'OT finalizada correctamente',
-            'cantidad_producida': ot.cantidad_producida,
+            'produccion_bruta_registrada': ot.produccion_bruta,
+            'cantidad_producida_neta': ot.cantidad_producida,
             'total_desperdicio_registrado': total_desperdicio
         }, status=status.HTTP_200_OK)
+
     # =================================================================
     # 5. ACCIÓN REGISTRAR NO CONFORMIDAD (NUEVO)
     # =================================================================
