@@ -135,9 +135,9 @@ def gestionar_stock_y_estado_para_orden_venta(orden_venta: OrdenVenta):
                         print(f"No se encontró 'cant_por_hora' para el producto {linea.id_producto.nombre}. No se creará orden de producción.")
                     else:
                         # Calcular múltiplo de cant_por_hora necesario para cubrir lo faltante
-                        faltante = cantidad_faltante_a_reservar
-                        multiplo = (faltante + cant_por_hora - 1) // cant_por_hora
-                        cantidad_a_producir = multiplo * cant_por_hora
+                        #faltante = cantidad_faltante_a_reservar
+                        #multiplo = (faltante + cant_por_hora - 1) // cant_por_hora
+                        #cantidad_a_producir = multiplo * cant_por_hora
 
                         # Obtener o crear estado "En espera" de forma segura
                         estado_en_espera = EstadoOrdenProduccion.objects.filter(descripcion__iexact="En espera").first()
@@ -150,7 +150,7 @@ def gestionar_stock_y_estado_para_orden_venta(orden_venta: OrdenVenta):
                         mañana = timezone.localdate() + timedelta(days=1)
 
                         orden_prod = OrdenProduccion.objects.create(
-                            cantidad=cantidad_a_producir,
+                            cantidad=cantidad_faltante_a_reservar,
                             id_estado_orden_produccion=estado_en_espera,
                             id_producto=linea.id_producto,
                             id_orden_venta=orden_venta,
