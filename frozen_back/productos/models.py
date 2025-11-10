@@ -94,6 +94,7 @@ class ComboProducto(models.Model):
     )
 
     cantidad = models.IntegerField(default=1)
+    precio_unitario = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
 
     class Meta:
         db_table = "combo_producto"
@@ -101,3 +102,28 @@ class ComboProducto(models.Model):
 
     def __str__(self):
         return f"{self.cantidad} x {self.id_producto.nombre} en combo {self.id_combo.nombre}"
+    
+
+
+
+class ImagenCombo(models.Model):
+    id_imagen_combo = models.AutoField(primary_key=True)
+
+    id_combo = models.ForeignKey(
+        Combo,
+        on_delete=models.CASCADE,
+        db_column="id_combo",
+        related_name="imagenes"
+    )
+
+    imagen_base64 = models.TextField(
+        null=True,
+        blank=True,
+        help_text="Imagen del combo en Base64"
+    )
+
+    class Meta:
+        db_table = "imagen_combo"
+
+    def __str__(self):
+        return f"Imagen del combo {self.id_combo.nombre}"
