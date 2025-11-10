@@ -158,7 +158,7 @@ def gestionar_stock_y_estado_para_orden_venta(orden_venta: OrdenVenta):
                             id_supervisor=default_supervisor,
                             fecha_inicio=mañana, 
                         )
-                        print(f"Creada OrdenProduccion #{orden_prod.id_orden_produccion} para producir {cantidad_a_producir} unidades (múltiplo de {cant_por_hora}) asociada a OrdenVenta #{orden_venta.pk}")
+                        print(f"Creada OrdenProduccion #{orden_prod.id_orden_produccion} para producir {cantidad_faltante_a_reservar} unidades (múltiplo de {cant_por_hora}) asociada a OrdenVenta #{orden_venta.pk}")
 
                         # Programar la gestión de reservas para que se ejecute después del commit
                         try:
