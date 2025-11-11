@@ -105,7 +105,7 @@ class OrdenDespachoViewSet(viewsets.ViewSet):
                 if orden_venta.id_orden_venta in ordenes_entregadas:
                     # ✅ Entregada
                     orden_venta.id_estado_venta = estado_despachado
-                    orden_venta.fecha_entrega = timezone.localdate()
+                    orden_venta.fecha_entrega = timezone.now()
                     relacion.id_estado_despacho = estado_despacho_despachado
                 else:
                     # ❌ No entregada
