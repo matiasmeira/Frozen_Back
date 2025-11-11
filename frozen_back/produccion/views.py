@@ -308,7 +308,7 @@ class OrdenDeTrabajoViewSet(viewsets.ModelViewSet):
             )
             
         # 4.3. Calcular Cantidad Producida Neta = Producción Bruta - Total Desperdicio
-        cantidad_producida_real = produccion_bruta_ingresada - total_desperdicio
+        cantidad_producida_real = produccion_bruta_ingresada #- total_desperdicio
         
         # 4.4. Asignar valores al modelo
         ot.produccion_bruta = produccion_bruta_ingresada
