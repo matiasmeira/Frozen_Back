@@ -181,14 +181,14 @@ class NoConformidad(models.Model):
     class Meta:
         db_table = "no_conformidades"
 
-    def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)
-        self.id_orden_trabajo.recalcular_cantidad_producida()
+    #def save(self, *args, **kwargs):
+    #   super().save(*args, **kwargs)
+    #    self.id_orden_trabajo.recalcular_cantidad_producida()
 
-    def delete(self, *args, **kwargs):
-        ot = self.id_orden_trabajo
-        super().delete(*args, **kwargs)
-        ot.recalcular_cantidad_producida()
+    #def delete(self, *args, **kwargs):
+    #    ot = self.id_orden_trabajo
+    #    super().delete(*args, **kwargs)
+    #    ot.recalcular_cantidad_producida()
 
 
 class PausaOT(models.Model):
