@@ -60,10 +60,9 @@ class OrdenProduccion(models.Model):
         Producto, on_delete=models.CASCADE, db_column="id_producto",
         blank=True, null=True
     )
-    ordenes_venta = models.ManyToManyField(
-        'ventas.OrdenVenta',
-        through='produccion.OrdenVentaProduccion',
-        related_name='ordenes_produccion'
+    # Asociación opcional a la orden de venta que originó esta orden de producción
+    id_orden_venta = models.ForeignKey(
+        OrdenVenta, on_delete=models.SET_NULL, blank=True, null=True, db_column="id_orden_venta"
     )
 
     history = HistoricalRecords()

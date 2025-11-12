@@ -139,6 +139,7 @@ def ejecutar_planificacion_diaria_mrp(fecha_simulada: date):
     estado_op_pendiente_inicio, _ = EstadoOrdenProduccion.objects.get_or_create(descripcion="Pendiente de inicio")
     estado_op_en_proceso, _ = EstadoOrdenProduccion.objects.get_or_create(descripcion="En proceso")
     estado_op_cancelada, _ = EstadoOrdenProduccion.objects.get_or_create(descripcion="Cancelado")
+    estado_op_planificada, _ = EstadoOrdenProduccion.objects.get_or_create(descripcion="Planificada")
     
     estado_oc_en_proceso, _ = EstadoOrdenCompra.objects.get_or_create(descripcion="En proceso")
     estado_reserva_activa, _ = EstadoReserva.objects.get_or_create(descripcion="Activa")
@@ -267,24 +268,42 @@ def ejecutar_planificacion_diaria_mrp(fecha_simulada: date):
         necesidad_total_produccion = cantidad_faltante_demanda + necesidad_stock_minimo
         fecha_mas_temprana = info_demanda.get('fecha_mas_temprana', hoy + timedelta(days=7))
 
-        # 2. ¿CUÁNTO TENEMOS EN PRODUCCIÓN? (Oferta de Producción)
+        # 2. ¿CUÁNTO TENEMOS EN PRODUCCIÓN? (Oferta Fija y Oferta Modificable)
+        
+        # ⚡ DEFINICIÓN AÑADIDA: Consulta base de todas las OPs existentes y activas
         ops_existentes_query = OrdenProduccion.objects.filter(
             id_producto=producto, 
-            id_estado_orden_produccion__in=[estado_op_en_espera, estado_op_pendiente_inicio, estado_op_en_proceso]
+            id_estado_orden_produccion__in=[estado_op_en_espera, estado_op_pendiente_inicio, estado_op_en_proceso, estado_op_planificada]
         )
         
+        # Oferta Fija: OPs que no están 'En espera' (no deben ser tocadas)
+        ops_fijas_query = ops_existentes_query.filter(
+            id_estado_orden_produccion__in=[estado_op_pendiente_inicio, estado_op_en_proceso, estado_op_planificada]
+        )
+        total_en_produccion_fija = ops_fijas_query.aggregate(total=Sum('cantidad'))['total'] or 0
+        
+        # Oferta Modificable: La única OP 'En espera' (si existe)
+        op_existente = ops_existentes_query.filter(
+            id_estado_orden_produccion=estado_op_en_espera,
+        ).first()
+        
+        # Cálculo para logging (Total Existente)
         total_en_produccion_existente = ops_existentes_query.aggregate(total=Sum('cantidad'))['total'] or 0
-
-        # 3. EL BALANCE
+        
+        # 3. EL BALANCE (Total) y el CÁLCULO DE LA CANTIDAD OBJETIVO
         balance = necesidad_total_produccion - total_en_produccion_existente
+        
+        # Cantidad que la OP 'En espera' (nueva o existente) debe cubrir
+        cantidad_objetivo_en_espera = max(0, necesidad_total_produccion - total_en_produccion_fija)
         
         print(f"  > Netting {producto.nombre}: Demanda Total={necesidad_total_produccion} - OPs en Curso={total_en_produccion_existente} = Balance={balance}")
 
-        if balance > 0:
+        if cantidad_objetivo_en_espera > 0:
             # --- FALTANTE: Necesitamos crear o actualizar una OP ---
-            print(f"    > Faltan {balance} unidades. Planificando OP...")
+            print(f"    > Faltan {cantidad_objetivo_en_espera} unidades netas a cubrir en la OP 'En espera'. Planificando OP...")
             
-            cantidad_a_producir_total = balance
+            # Usamos la cantidad objetivo para la nueva/actualizada OP
+            cantidad_a_producir_total = cantidad_objetivo_en_espera 
             fecha_entrega_ov = fecha_mas_temprana
 
             try:
@@ -328,11 +347,8 @@ def ejecutar_planificacion_diaria_mrp(fecha_simulada: date):
                 fecha_inicio_dt = timezone.make_aware(datetime.combine(fecha_inicio_op, datetime.min.time()))
                 # --- FIN LÓGICA LEAD TIME ---
 
-                # 1. Intentar encontrar una OP existente y abierta para este producto (EVITAR DUPLICADOS)
-                op_existente = OrdenProduccion.objects.filter(
-                    id_producto=producto,
-                    id_estado_orden_produccion=estado_op_en_espera,
-                ).first()
+                # 1. Intentar encontrar una OP existente y abierta para este producto 
+                # (Usamos la op_existente obtenida previamente)
                 
                 if op_existente:
                     # Si existe, la actualizamos
@@ -340,7 +356,7 @@ def ejecutar_planificacion_diaria_mrp(fecha_simulada: date):
                     op_existente.fecha_inicio = fecha_inicio_dt
                     op_existente.save()
                     op = op_existente
-                    created = False # 🚨 Se mantiene como False
+                    created = False
                     print(f"    -> ACTUALIZADA OP {op.id_orden_produccion}: Total ahora es {op.cantidad}. Fecha inicio ajustada a {fecha_inicio_op}.")
                 else:
                     # Si no existe, creamos una nueva
@@ -350,10 +366,10 @@ def ejecutar_planificacion_diaria_mrp(fecha_simulada: date):
                         fecha_inicio=fecha_inicio_dt,
                         cantidad=cantidad_a_producir_total
                     )
-                    created = True # 🚨 Se define aquí cuando es True
+                    created = True
                     print(f"    -> CREADA OP {op.id_orden_produccion} para {cantidad_a_producir_total} de {producto.nombre} (Inicio: {fecha_inicio_op})")
 
-                # 2. Lógica de creación/asignación del Lote
+                # 2. Lógica de creación/asignación del Lote (Mantenido)
                 if created or not op.id_lote_produccion:
                     try:
                         estado_lote_espera = EstadoLoteProduccion.objects.get(descripcion__iexact="En espera")
@@ -375,13 +391,13 @@ def ejecutar_planificacion_diaria_mrp(fecha_simulada: date):
                     except Exception as e_lote:
                         print(f"    !ERROR CRÍTICO al crear Lote para OP {op.id_orden_produccion}: {e_lote}")
                 
-                # 3. Actualizamos la cantidad del lote si la OP fue actualizada
+                # 3. Actualizamos la cantidad del lote si la OP fue actualizada (Mantenido)
                 elif op and not created and op.id_lote_produccion:
                     op.id_lote_produccion.cantidad = op.cantidad
                     op.id_lote_produccion.save()
 
 
-                # 4. Agregamos la OP a la lista del PASO 5
+                # 4. Agregamos la OP a la lista del PASO 5 (Mantenido)
                 if op:
                     ops_a_procesar_en_paso_5.append( (op, demanda_neta_mp_op) )
                 
@@ -396,6 +412,7 @@ def ejecutar_planificacion_diaria_mrp(fecha_simulada: date):
             print(f"  > {producto.nombre}: Demanda ({necesidad_total_produccion}) < Producción ({total_en_produccion_existente}). Sobran {cantidad_a_cancelar}. Cancelando OPs...")
             
             # Cancelamos OPs "En espera" primero (de más nueva a más vieja)
+            # ⚡ CORRECCIÓN: Ahora ops_existentes_query está definida
             ops_en_espera_a_cancelar = ops_existentes_query.filter(id_estado_orden_produccion=estado_op_en_espera).order_by('-fecha_inicio')
             
             for op in ops_en_espera_a_cancelar:
@@ -536,6 +553,7 @@ def ejecutar_planificacion_diaria_mrp(fecha_simulada: date):
 
     # 5.2: Crear las Órdenes de Compra (OC)
     print(f"  > Creando {len(compras_agregadas_por_proveedor)} OCs agrupadas por proveedor...")
+
     for proveedor_id, info in compras_agregadas_por_proveedor.items():
         proveedor = info["proveedor"]
         fecha_necesaria_mp = info["fecha_requerida_mas_temprana"]
@@ -547,34 +565,43 @@ def ejecutar_planificacion_diaria_mrp(fecha_simulada: date):
         if fecha_solicitud_oc < hoy:
             fecha_solicitud_oc = hoy
             fecha_entrega_oc = hoy + timedelta(days=lead_time)
-            print(f"  !ALERTA OC: Pedido a {proveedor.nombre} está retrasado. Nueva entrega: {fecha_entrega_oc}")
+            print(f"  !ALERTA OC: Pedido a {proveedor.nombre} está retrasado. Nueva entrega: {fecha_entrega_oc}")
             
+        # 🚨 NOTA: get_or_create usa fecha_entrega_estimada como filtro. 
+        # Si la OC fue creada originalmente con una fecha diferente a la recién calculada, 
+        # se creará una nueva OC. Esto está bien si quieres una OC por fecha de entrega.
         oc, created = OrdenCompra.objects.get_or_create(
             id_proveedor=proveedor,
             id_estado_orden_compra=estado_oc_en_proceso,
             fecha_entrega_estimada=fecha_entrega_oc,
             defaults={'fecha_solicitud': fecha_solicitud_oc}
         )
-        print(f"  > Generando OC {oc.id_orden_compra} para {proveedor.nombre} (Entrega: {fecha_entrega_oc})")
+        print(f"  > Generando OC {oc.id_orden_compra} para {proveedor.nombre} (Entrega: {fecha_entrega_oc})")
         
-        for mp_id, cantidad in info["items"].items():
-            # --- INICIO DE CORRECCIÓN (IDEMPOTENCIA) ---
-            # Usamos get_or_create. Si ya existe, NO HACEMOS NADA,
-            # porque la cantidad necesaria (calculada hoy) es la misma que
-            # se calculó ayer (y que ya está en la OC).
-            item_oc, item_created = OrdenCompraMateriaPrima.objects.get_or_create(
+        for mp_id, cantidad_necesaria_hoy in info["items"].items():
+    
+            # 1. Intentar encontrar el ítem de MP existente en la OC
+            item_oc = OrdenCompraMateriaPrima.objects.filter(
                 id_orden_compra=oc,
                 id_materia_prima_id=mp_id,
-                defaults={'cantidad': cantidad}
-            )
+            ).first()
             
-            if item_created:
-                print(f"    - NUEVO Item: {cantidad} de MP {mp_id}")
+            if item_oc:
+                # 🛠️ CORRECCIÓN CLAVE: Sobrescribir la cantidad.
+                # 'cantidad_necesaria_hoy' es el nuevo déficit consolidado total.
+                item_oc.cantidad = cantidad_necesaria_hoy 
+                item_oc.save()
+                
+                print(f"      - Item existente (MP {mp_id}) en OC {oc.id_orden_compra} ACTUALIZADO a {cantidad_necesaria_hoy}.")
+            
             else:
-                # Si no se creó, significa que el planificador ya agregó este item
-                # en una corrida anterior. No lo duplicamos.
-                print(f"    - Item existente (MP {mp_id}) ya está en la OC. No se modifica.")
-            # --- FIN DE CORRECCIÓN ---
+                # 2. Si el ítem no existe, lo creamos.
+                OrdenCompraMateriaPrima.objects.create(
+                    id_orden_compra=oc,
+                    id_materia_prima_id=mp_id,
+                    cantidad=cantidad_necesaria_hoy
+                )
+                print(f"      - NUEVO Item: {cantidad_necesaria_hoy} de MP {mp_id} añadido a OC {oc.id_orden_compra}.")
 
     # 5.3: Actualizar OPs que SÍ tienen material a "Pendiente de inicio"
     for op in ops_listas_para_iniciar:
