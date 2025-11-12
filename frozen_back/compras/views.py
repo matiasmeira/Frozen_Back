@@ -22,7 +22,9 @@ class ordenCompraViewSet(viewsets.ModelViewSet):
     serializer_class = ordenCompraSerializer
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
     filterset_fields = ["fecha_solicitud", "id_proveedor", "id_estado_orden_compra"]
-    search_fields = ["id_proveedor__nombre"]
+    search_fields = ["id_proveedor__nombre", "id_orden_compra"]
+    """Ordenar por id de orden de compra de forma descendente por defecto"""
+    ordering = ['-id_orden_compra']
 
     @action(detail=True, methods=['patch'])
     @transaction.atomic

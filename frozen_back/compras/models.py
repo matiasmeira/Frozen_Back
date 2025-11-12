@@ -20,6 +20,7 @@ class OrdenCompra(models.Model):
     history = HistoricalRecords()
     class Meta:
         db_table = "orden_compra"
+        ordering = ['-id_orden_compra']
 
 class OrdenCompraMateriaPrima(models.Model):
     id_orden_compra_materia_prima = models.AutoField(primary_key=True)
