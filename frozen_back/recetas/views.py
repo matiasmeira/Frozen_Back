@@ -8,7 +8,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 
 from produccion.models import LineaProduccion
 from .models import ProductoLinea, Receta, RecetaMateriaPrima
-from .serializers import RecetaSerializer, RecetaMateriaPrimaSerializer
+from .serializers import RecetaSerializer, RecetaMateriaPrimaSerializer, ProductoLineaSerializer
 
 # ------------------------------
 # Receta
@@ -56,3 +56,11 @@ class LineasProduccionPorProductoView(APIView):
         ).values("id_linea_produccion", "descripcion")
 
         return Response(list(lineas), status=status.HTTP_200_OK)
+    
+class ProductoLineaViewSet(viewsets.ModelViewSet):
+    queryset = ProductoLinea.objects.all()
+    # Asumiendo que existe un serializer para ProductoLinea
+    serializer_class = ProductoLineaSerializer  # Cambiar al serializer correcto cuando esté disponible
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter]
+    filterset_fields = ["id_producto", "id_linea_produccion"]
+    search_fields = ["id_producto__nombre", "id_linea_produccion__descripcion"]

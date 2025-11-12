@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Receta, RecetaMateriaPrima
+from .models import ProductoLinea, Receta, RecetaMateriaPrima
 from materias_primas.models import MateriaPrima
 
 # ------------------------------
@@ -20,3 +20,13 @@ class RecetaMateriaPrimaSerializer(serializers.ModelSerializer):
     class Meta:
         model = RecetaMateriaPrima
         fields = ["id_receta_materia_prima", "id_receta", "id_materia_prima", "nombre_materia_prima", "cantidad"]
+
+
+# ------------------------------
+# Serializer ProductoLinea
+# ------------------------------
+class ProductoLineaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductoLinea
+        fields = "__all__"
+        

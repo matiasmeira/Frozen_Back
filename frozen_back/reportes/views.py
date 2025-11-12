@@ -545,7 +545,9 @@ class LineasProduccionYEstado(APIView):
                 F('id_estado_linea_produccion__descripcion'), 
                 Value('Sin Estado Asignado'),
                 output_field=CharField()
-            )
+            ),
+            id_linea=F('id_linea_produccion')
+            
         ).order_by('nombre_linea')
         
         """
