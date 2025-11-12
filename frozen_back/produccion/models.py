@@ -60,9 +60,10 @@ class OrdenProduccion(models.Model):
         Producto, on_delete=models.CASCADE, db_column="id_producto",
         blank=True, null=True
     )
-    # Asociación opcional a la orden de venta que originó esta orden de producción
-    id_orden_venta = models.ForeignKey(
-        OrdenVenta, on_delete=models.SET_NULL, blank=True, null=True, db_column="id_orden_venta"
+    ordenes_venta = models.ManyToManyField(
+        'ventas.OrdenVenta',
+        through='produccion.OrdenVentaProduccion',
+        related_name='ordenes_produccion'
     )
 
     history = HistoricalRecords()
@@ -209,3 +210,35 @@ class PausaOT(models.Model):
 
     class Meta:
         db_table = "pausa_orden_trabajo"
+
+
+
+
+class OrdenVentaProduccion(models.Model):
+    id_orden_venta_produccion = models.AutoField(primary_key=True)
+
+    id_orden_venta = models.ForeignKey(
+        'ventas.OrdenVenta',
+        on_delete=models.CASCADE,
+        db_column='id_orden_venta'
+    )
+
+    id_orden_produccion = models.ForeignKey(
+        'produccion.OrdenProduccion',
+        on_delete=models.CASCADE,
+        db_column='id_orden_produccion'
+    )
+
+    cantidad_asignada = models.IntegerField(
+        null=True, blank=True,
+        help_text="Cantidad de productos de esta OP asignada a esta OV (opcional)"
+    )
+
+    class Meta:
+        db_table = "orden_venta_produccion"
+        unique_together = (("id_orden_venta", "id_orden_produccion"),)
+        verbose_name = "Relación Orden de Venta - Orden de Producción"
+        verbose_name_plural = "Relaciones Orden de Venta - Orden de Producción"
+
+    def __str__(self):
+        return f"OV-{self.id_orden_venta_id} ↔ OP-{self.id_orden_produccion_id}"

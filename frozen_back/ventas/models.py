@@ -189,3 +189,7 @@ class NotaCredito(models.Model):
 
     def __str__(self):
         return f"NC-{self.id_nota_credito} (Factura: {self.id_factura.id_factura})"
+    
+
+
+    
