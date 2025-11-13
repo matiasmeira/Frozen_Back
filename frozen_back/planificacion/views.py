@@ -158,6 +158,8 @@ class CalendarioPlanificacionView(APIView):
             # pero para el calendario, estimamos el final del día de inicio o el día siguiente.
             end_dt = start_dt + timedelta(hours=8) # Estimamos 8 horas de duración para la visualización
 
+            fecha_planificada = op.fecha_planificada
+
             eventos.append({
                 "id": f"OP-{op.id_orden_produccion}",
                 "title": f"OP-{op.id_orden_produccion}: {op.id_producto.nombre} ({op.cantidad} u.)",
@@ -165,7 +167,8 @@ class CalendarioPlanificacionView(APIView):
                 "end": end_dt.isoformat(),
                 "type": "Produccion",
                 "status": op.id_estado_orden_produccion.descripcion,
-                "quantity": op.cantidad
+                "quantity": op.cantidad,
+                "fecha_planificada": fecha_planificada
             })
 
         # --- B. EVENTOS DE COMPRA (OrdenCompra - OCs) ---
