@@ -34,6 +34,7 @@ class OrdenProduccion(models.Model):
     id_orden_produccion = models.AutoField(primary_key=True)
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_inicio = models.DateTimeField(blank=True, null=True)
+    fecha_planificada = models.DateTimeField(blank=True, null=True)
     cantidad = models.IntegerField()
 
     id_estado_orden_produccion = models.ForeignKey(

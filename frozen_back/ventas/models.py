@@ -113,6 +113,7 @@ class OrdenVenta(models.Model):
     id_prioridad = models.ForeignKey(Prioridad, on_delete=models.CASCADE, db_column="id_prioridad")
     fecha_entrega = models.DateTimeField(null=True, blank=True)
     fecha_estimada = models.DateField(null=True, blank=True)
+    fecha_entrega_planificada = models.DateTimeField(blank=True, null=True)
     # Opcional: empleado asociado a la orden (por ejemplo ventas en mostrador)
     id_empleado = models.ForeignKey(
         'empleados.Empleado',
