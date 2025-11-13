@@ -24,7 +24,7 @@ from recetas.models import ProductoLinea, Receta, RecetaMateriaPrima
 from materias_primas.models import MateriaPrima, Proveedor
 
 # --- Constantes de Planificación (Centralizadas) ---
-HORAS_LABORABLES_POR_DIA = 8
+HORAS_LABORABLES_POR_DIA = 24
 DIAS_BUFFER_ENTREGA_PT = 1      # Terminar producción X días ANTES de la entrega de la OV
 DIAS_BUFFER_RECEPCION_MP = 1 # Recibir MP X días ANTES de iniciar la OP
 
