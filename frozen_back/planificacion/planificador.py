@@ -339,7 +339,7 @@ def ejecutar_planificacion_diaria_mrp(fecha_simulada: date):
                 
                 dias_totales_previos = dias_produccion + max_lead_time_mp + DIAS_BUFFER_ENTREGA_PT + DIAS_BUFFER_RECEPCION_MP
                 fecha_inicio_op = fecha_entrega_ov - timedelta(days=dias_totales_previos)
-                fecha_planificada_op = fecha_entrega_ov - timedelta(days=dias_produccion) - DIAS_BUFFER_ENTREGA_PT #---> LO AGREGO GIULIANO
+                fecha_planificada_op = fecha_entrega_ov - timedelta(days=dias_produccion) - timedelta(DIAS_BUFFER_ENTREGA_PT) #---> LO AGREGO GIULIANO
 
                 if fecha_inicio_op < hoy:
                     print(f"    !ALERTA: OP para {producto.nombre} (requerida para {fecha_entrega_ov}). Planificando ASAP.")
