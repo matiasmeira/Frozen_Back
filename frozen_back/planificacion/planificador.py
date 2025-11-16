@@ -568,10 +568,11 @@ def ejecutar_planificacion_diaria_mrp(fecha_simulada: date):
                 print(f"      !!! Producción termina el: {op.fecha_fin_planificada}")
                 print(f"      !!! Nueva fecha de entrega sugerida: {nueva_fecha_entrega_sugerida_date}")
                 print(f"      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-
+                
+                dias_totales_margen = DIAS_BUFFER_ENTREGA_PT
                 hora_original = ov.fecha_entrega.time()
                 nueva_fecha_naive = datetime.combine(nueva_fecha_entrega_sugerida_date, hora_original)
-                nueva_fecha_entrega_aware = timezone.make_aware(nueva_fecha_naive)
+                nueva_fecha_entrega_aware = timezone.make_aware(nueva_fecha_naive) + timedelta(days=dias_totales_margen)
 
                 print(f"      !!! DESPLAZANDO OV {ov.id_orden_venta} a {nueva_fecha_entrega_aware.date()}")
                 
