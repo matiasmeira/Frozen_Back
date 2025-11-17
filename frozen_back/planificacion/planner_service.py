@@ -4,7 +4,7 @@ from django.utils import timezone
 from django.db import transaction
 # ❗️ Importar Count para chequear tareas restantes
 from django.db.models import Q, Sum, Count 
-from datetime import timedelta, date, datetime
+from datetime import timedelta, date, datetime, time
 
 from produccion.models import (
     OrdenProduccion,
@@ -207,8 +207,7 @@ def ejecutar_planificador(fecha_simulada: date):
     # estado_op_en_espera = EstadoOrdenProduccion.objects.get(descripcion="En espera") # Ya no lo usamos aquí
     estado_op_en_proceso = EstadoOrdenProduccion.objects.get(descripcion="En proceso")
 
-    hora_base_dt = timezone.make_aware(datetime.combine(dia_de_planificacion, datetime.min.time()))
-
+    hora_base_dt = timezone.make_aware(datetime.combine(dia_de_planificacion, time(6, 0)))
     ots_creadas = []
     ops_planificadas_exitosamente = set() # ID de OPs con OTs creadas
     cal_tasks_exitosas_ids = set() # ID de Tareas del Calendario completadas
