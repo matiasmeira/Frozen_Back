@@ -4,7 +4,7 @@ from stock.models import LoteProduccion, ReservaStock, EstadoLoteProduccion, Est
 from stock.services import verificar_stock_y_enviar_alerta
 from stock.models import ReservaStock
 from django.db.models import Sum, F, Q
-
+from collections import defaultdict
 from datetime import date, timedelta
 from django.utils import timezone
 import math
@@ -21,7 +21,7 @@ DIAS_BUFFER_ENTREGA_PT = 1
 DIAS_BUFFER_RECEPCION_MP = 1
 
 
-
+ 
 @transaction.atomic
 def registrar_orden_venta_y_actualizar_estado(orden_venta: OrdenVenta):
     """
@@ -188,117 +188,124 @@ def crear_nota_credito_y_devolver_stock(orden_venta: OrdenVenta, motivo: str = N
 
 
 
-def calcular_fecha_estimada_entrega(id_producto, cantidad_solicitada):
+def verificar_orden_completa(items):
     """
-    Calcula la fecha de entrega más temprana posible (CTP) 
-    basada en Stock PT, Lead Time de MP y Capacidad de Máquina.
+    Recibe: [{"producto_id": 1, "cantidad": 100}, {"producto_id": 2, "cantidad": 50}]
+    Devuelve: Global status y detalles por ítem.
     """
     hoy = timezone.now().date()
     
-    # 1. Verificar Stock de Producto Terminado (PT)
-    stock_pt_actual = get_stock_disponible_para_producto(id_producto)
+    # --- 1. Inicializar "Memoria Virtual" de la Simulación ---
+    # Esto rastrea cuánto stock hemos "imaginado" que consumimos en esta orden
+    virtual_stock_pt_consumido = defaultdict(int)
+    virtual_stock_mp_consumido = defaultdict(int)
     
-    # Si hay suficiente stock ya fabricado
-    if stock_pt_actual >= cantidad_solicitada:
-        # Entrega inmediata (mañana)
-        fecha_entrega = hoy + timedelta(days=1)
-        while fecha_entrega.weekday() >= 5: fecha_entrega += timedelta(days=1)
-        return {
-            "es_posible": True,
-            "fecha_estimada": fecha_entrega,
-            "origen": "Stock Existente"
-        }
+    # Para la capacidad, rastreamos cuándo se libera cada línea
+    # { linea_id: fecha_liberacion_estimada }
+    virtual_calendario_lineas = defaultdict(lambda: hoy)
 
-    # Si falta, calculamos cuánto hay que producir
-    cantidad_a_producir = cantidad_solicitada - stock_pt_actual
-    
-    # 2. Calcular Disponibilidad de Materia Prima (MP) y Lead Time
-    max_lead_time_mp = 0
-    try:
-        receta = Receta.objects.get(id_producto=id_producto)
-        ingredientes = RecetaMateriaPrima.objects.filter(id_receta=receta)
+    fecha_final_orden = hoy
+    detalles_items = []
+    es_toda_factible = True
+    warning_global = None
+
+    for item in items:
+        p_id = item['producto_id']
+        cant_solicitada = int(item['cantidad'])
         
-        for ing in ingredientes:
-            cantidad_necesaria = ing.cantidad * cantidad_a_producir
-            stock_mp = get_stock_disponible_para_materia_prima(ing.id_materia_prima.id_materia_prima)
+        # --- A. Consumo de Stock PT ---
+        stock_real_pt = get_stock_disponible_para_producto(p_id)
+        stock_virtual_disponible = max(0, stock_real_pt - virtual_stock_pt_consumido[p_id])
+        
+        tomar_de_stock = min(stock_virtual_disponible, cant_solicitada)
+        a_producir = cant_solicitada - tomar_de_stock
+        
+        # Registramos el consumo virtual
+        virtual_stock_pt_consumido[p_id] += tomar_de_stock
+
+        fecha_entrega_item = hoy
+        origen = "Stock"
+
+        # --- B. Simulación de Producción (Si falta stock) ---
+        if a_producir > 0:
+            origen = "Producción"
+            max_lead_time_mp = 0
             
-            if stock_mp < cantidad_necesaria:
-                # Falta material, buscamos el Lead Time del proveedor
-                lead_prov = ing.id_materia_prima.id_proveedor.lead_time_days
-                if lead_prov > max_lead_time_mp:
-                    max_lead_time_mp = lead_prov
+            # 1. Chequeo MP (Acumulativo)
+            try:
+                receta = Receta.objects.get(id_producto=p_id)
+                ingredientes = RecetaMateriaPrima.objects.filter(id_receta=receta)
+                
+                for ing in ingredientes:
+                    mp_id = ing.id_materia_prima.id_materia_prima
+                    cant_necesaria = ing.cantidad * a_producir
                     
-    except Receta.DoesNotExist:
-        return {"error": "El producto no tiene receta activa."}
+                    stock_real_mp = get_stock_disponible_para_materia_prima(mp_id)
+                    # Restamos lo que ya consumieron los items anteriores de esta lista
+                    stock_mp_virtual = max(0, stock_real_mp - virtual_stock_mp_consumido[mp_id])
+                    
+                    if stock_mp_virtual < cant_necesaria:
+                        # Falta MP, calculamos Lead Time
+                        lt = ing.id_materia_prima.id_proveedor.lead_time_days
+                        max_lead_time_mp = max(max_lead_time_mp, lt)
+                        # Asumimos que compramos lo que falta, no consumimos del virtual negativo
+                    else:
+                        # Hay stock, lo consumimos virtualmente
+                        virtual_stock_mp_consumido[mp_id] += cant_necesaria
+                        
+            except Receta.DoesNotExist:
+                warning_global = f"Producto {p_id} sin receta."
+            
+            # 2. Calcular Fechas MP
+            fecha_llegada_mp = hoy + timedelta(days=max_lead_time_mp)
+            while fecha_llegada_mp.weekday() >= 5: fecha_llegada_mp += timedelta(days=1)
+            
+            fecha_inicio_prod = fecha_llegada_mp + timedelta(days=DIAS_BUFFER_RECEPCION_MP)
+            while fecha_inicio_prod.weekday() >= 5: fecha_inicio_prod += timedelta(days=1)
 
-    # Calcular fecha llegada materiales
-    fecha_llegada_mp = hoy + timedelta(days=max_lead_time_mp)
-    while fecha_llegada_mp.weekday() >= 5: fecha_llegada_mp += timedelta(days=1)
-    
-    # Fecha inicio producción (después del buffer MP)
-    fecha_inicio_prod = fecha_llegada_mp + timedelta(days=DIAS_BUFFER_RECEPCION_MP)
-    while fecha_inicio_prod.weekday() >= 5: fecha_inicio_prod += timedelta(days=1)
+            # 3. Calcular Tiempo Máquina (Acumulativo sobre la línea)
+            capacidades = ProductoLinea.objects.filter(id_producto=p_id)
+            if capacidades.exists():
+                cap_total = capacidades.aggregate(total=Sum('cant_por_hora'))['total'] or 1
+                horas_nec = math.ceil(a_producir / cap_total)
+                dias_prod = math.ceil(horas_nec / HORAS_LABORABLES_POR_DIA)
+                
+                # Buscamos cuándo se libera la línea más ocupada
+                fecha_base_linea = fecha_inicio_prod
+                for cap in capacidades:
+                    fecha_linea = virtual_calendario_lineas[cap.id_linea_produccion]
+                    if fecha_linea > fecha_base_linea:
+                        fecha_base_linea = fecha_linea
+                
+                # Sumamos días de trabajo
+                fecha_fin_prod = fecha_base_linea + timedelta(days=dias_prod)
+                while fecha_fin_prod.weekday() >= 5: fecha_fin_prod += timedelta(days=1)
+                
+                # Actualizamos el calendario virtual de esas líneas
+                # (El próximo producto que use esta línea tendrá que esperar a esta fecha)
+                for cap in capacidades:
+                    virtual_calendario_lineas[cap.id_linea_produccion] = fecha_fin_prod
+                
+                fecha_entrega_item = fecha_fin_prod + timedelta(days=DIAS_BUFFER_ENTREGA_PT + 1)
+            else:
+                fecha_entrega_item = fecha_inicio_prod # Fallback sin lineas
 
-    # 3. Calcular Tiempo de Producción (Capacidad)
-    capacidades = ProductoLinea.objects.filter(id_producto=id_producto)
-    if not capacidades.exists():
-         return {"error": "El producto no tiene líneas de producción asignadas."}
-         
-    capacidad_total_hora = capacidades.aggregate(total=Sum('cant_por_hora'))['total'] or 0
-    if capacidad_total_hora <= 0:
-         return {"error": "Capacidad de producción es 0."}
-         
-    horas_necesarias = math.ceil(cantidad_a_producir / capacidad_total_hora)
-    
-    # 4. "Walk the Calendar" (Solo lectura) para ver huecos disponibles
-    # Buscamos cuándo terminaría realmente considerando la carga actual de la fábrica
-    fecha_cursor = fecha_inicio_prod
-    horas_pendientes = horas_necesarias
-    
-    lineas_ids = [c.id_linea_produccion_id for c in capacidades]
-    
-    # Estados que ocupan máquina
-    estados_ocupados = ["En espera", "Pendiente de inicio", "En proceso"] 
-    
-    while horas_pendientes > 0:
-        # Saltar fines de semana
-        while fecha_cursor.weekday() >= 5: fecha_cursor += timedelta(days=1)
-        
-        # Consultar cuánto está ocupado ese día
-        carga_existente = CalendarioProduccion.objects.filter(
-            id_linea_produccion_id__in=lineas_ids,
-            fecha=fecha_cursor,
-            id_orden_produccion__id_estado_orden_produccion__descripcion__in=estados_ocupados
-        ).aggregate(total=Sum('horas_reservadas'))['total'] or 0
-        
-        # Se asume que las líneas trabajan en paralelo, tomamos el promedio de ocupación o 
-        # simplificamos asumiendo que el cuello de botella dicta el día.
-        # Para el chequeo rápido, asumimos capacidad total del día:
-        horas_disponibles_hoy = max(0, HORAS_LABORABLES_POR_DIA - float(carga_existente))
-        
-        # Si hay hueco, consumimos horas
-        if horas_disponibles_hoy > 0:
-            horas_a_tomar = min(horas_pendientes, horas_disponibles_hoy)
-            horas_pendientes -= horas_a_tomar
-        
-        if horas_pendientes > 0:
-            fecha_cursor += timedelta(days=1)
+        # Ajuste final fines de semana
+        while fecha_entrega_item.weekday() >= 5: fecha_entrega_item += timedelta(days=1)
 
-    fecha_fin_produccion = fecha_cursor
-    
-    # 5. Calcular Fecha Entrega Final
-    fecha_entrega_calculada = fecha_fin_produccion + timedelta(days=DIAS_BUFFER_ENTREGA_PT + 1) # +1 seguridad
-    while fecha_entrega_calculada.weekday() >= 5: fecha_entrega_calculada += timedelta(days=1)
+        # Actualizar fecha global de la orden
+        if fecha_entrega_item > fecha_final_orden:
+            fecha_final_orden = fecha_entrega_item
+
+        detalles_items.append({
+            "producto_id": p_id,
+            "cantidad": cant_solicitada,
+            "origen": origen,
+            "fecha_item": fecha_entrega_item
+        })
 
     return {
-        "es_posible": True,
-        "fecha_estimada": fecha_entrega_calculada,
-        "origen": "Producción (CTP)",
-        "detalles": {
-            "stock_actual": stock_pt_actual,
-            "a_producir": cantidad_a_producir,
-            "dias_espera_materiales": max_lead_time_mp,
-            "fecha_inicio_prod": fecha_inicio_prod,
-            "horas_produccion": horas_necesarias
-        }
+        "fecha_sugerida_total": fecha_final_orden,
+        "detalles": detalles_items,
+        "items_analizados": len(items)
     }
