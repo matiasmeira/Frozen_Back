@@ -587,27 +587,37 @@ def ejecutar_planificacion_diaria_mrp(fecha_simulada: date):
             
             # --- ❗️ D. CALCULAR FECHA DE INICIO MÍNIMA REAL ---
             
-            # La MP llegará (como muy pronto)
-            fecha_llegada_mp_estimada = hoy + timedelta(days=max_lead_time_mp + DIAS_BUFFER_RECEPCION_MP)
+            # 1. Calcular cuándo llega la MP (Lead Time puro)
+            fecha_recepcion_mp_pura = hoy + timedelta(days=max_lead_time_mp)
             
-            # La fecha MÍNIMA para empezar es la MÁS TARDÍA de:
-            # 1. La fecha ideal por la OV (calculada en B)
-            # 2. La fecha en que llega la MP
-            fecha_inicio_minima_real = max(fecha_planificada_ideal, fecha_llegada_mp_estimada)
+            # Si la recepción cae Sábado o Domingo, pasamos al Lunes siguiente
+            while fecha_recepcion_mp_pura.weekday() >= 5:
+                fecha_recepcion_mp_pura += timedelta(days=1)
             
-            print(f"      > Fecha ideal (OV): {fecha_planificada_ideal}. Fecha llegada MP: {fecha_llegada_mp_estimada}.")
+            # 2. Sumar BUFFER para determinar cuándo puede INICIAR la producción
+            # (Esto asegura que la producción empiece DESPUÉS de que llegue la MP)
+            fecha_inicio_por_materiales = fecha_recepcion_mp_pura + timedelta(days=DIAS_BUFFER_RECEPCION_MP)
+
+            # Si el inicio calculado cae finde, mover al Lunes
+            while fecha_inicio_por_materiales.weekday() >= 5:
+                fecha_inicio_por_materiales += timedelta(days=1)
+
+            # La fecha MÍNIMA es la mayor entre la ideal (por venta) y la posible (por materiales)
+            fecha_inicio_minima_real = max(fecha_planificada_ideal, fecha_inicio_por_materiales)
+            
+            print(f"      > Fecha ideal (OV): {fecha_planificada_ideal}. Materiales listos: {fecha_inicio_por_materiales}.")
             print(f"      > Inicio MÍNIMO REAL (max): {fecha_inicio_minima_real}.")
 
 
-           # --- E. LÓGICA "WALK THE CALENDAR" ---
+            # --- E. LÓGICA "WALK THE CALENDAR" ---
             
-            # ❗️ 1. Variable para rastrear la cantidad restante de la OP
             cantidad_pendiente_op = cantidad_a_producir 
-            
             horas_pendientes = horas_necesarias_totales 
+            
             fecha_a_buscar = fecha_inicio_minima_real
-
-            while fecha_a_buscar.weekday() >= 5: # 5=Sábado, 6=Domingo
+            
+            # Validación inicial de finde (por si acaso)
+            while fecha_a_buscar.weekday() >= 5:
                 fecha_a_buscar += timedelta(days=1)
 
             fecha_inicio_real_asignada = None
@@ -616,19 +626,15 @@ def ejecutar_planificacion_diaria_mrp(fecha_simulada: date):
             
             print(f"       > Buscando hueco desde {fecha_a_buscar}...")
 
-            # ❗️ 2. El bucle ahora TAMBIÉN debe chequear la cantidad
             while horas_pendientes > 0 and cantidad_pendiente_op > 0:
                 horas_libres_cuello_botella = HORAS_LABORABLES_POR_DIA
                 lineas_ids_producto = [c.id_linea_produccion_id for c in capacidades_linea]
                 
-                # ... (Lógica de carga_existente no cambia) ...
                 carga_existente = CalendarioProduccion.objects.filter(
                     id_linea_produccion_id__in=lineas_ids_producto,
                     fecha=fecha_a_buscar,
                     id_orden_produccion__id_estado_orden_produccion__in=[estado_op_en_espera, estado_op_pendiente_inicio]
-                ).values(
-                    'id_linea_produccion_id'
-                ).annotate(
+                ).values('id_linea_produccion_id').annotate(
                     total_reservado=Sum('horas_reservadas')
                 ).values('id_linea_produccion_id', 'total_reservado')
                 
@@ -641,86 +647,72 @@ def ejecutar_planificacion_diaria_mrp(fecha_simulada: date):
 
                 horas_libres_enteras = math.floor(horas_libres_cuello_botella)
 
+                # Si no hay horas hoy, avanzar
                 if horas_libres_enteras <= 0:
                     fecha_a_buscar += timedelta(days=1)
+                    while fecha_a_buscar.weekday() >= 5: fecha_a_buscar += timedelta(days=1)
                     continue
                     
                 horas_a_reservar_hoy = min(horas_pendientes, horas_libres_enteras) 
-
                 se_reservo_tiempo_en_fecha = False
 
                 for cap_linea in capacidades_linea:
-                    
-                    # ❗️ 3. Calcular la cantidad MÁXIMA que esta línea puede hacer
-                    # Ej: (2 horas * 75/hr) = 150
                     cantidad_calculada_linea = round(float(horas_a_reservar_hoy) * float(cap_linea.cant_por_hora))
-                    
-                    # ❗️ 4. LIMITAR esa cantidad a lo que realmente falta
-                    # Ej: min(100, 150) = 100
                     cantidad_real_linea = min(cantidad_pendiente_op, cantidad_calculada_linea)
 
                     if horas_a_reservar_hoy > 0 and cantidad_real_linea > 0:
                         se_reservo_tiempo_en_fecha = True 
-                        
-                        # ❗️ 5. CORRECCIÓN: Usar el bloque de horas entero (horas_a_reservar_hoy)
-                        # NO calcular 'horas_reales_linea'.
                         
                         reservas_a_crear_bulk.append(
                             CalendarioProduccion(
                                 id_orden_produccion=op, 
                                 id_linea_produccion=cap_linea.id_linea_produccion,
                                 fecha=fecha_a_buscar,
-                                horas_reservadas=horas_a_reservar_hoy, # ❗️ USAR EL BLOQUE TOTAL (Ej: 2)
-                                cantidad_a_producir=cantidad_real_linea # ❗️ USAR CANTIDAD REAL (Ej: 100)
+                                horas_reservadas=horas_a_reservar_hoy,
+                                cantidad_a_producir=cantidad_real_linea
                             )
                         )
                         
-                        # ❗️ 6. RESTAR de la cantidad pendiente
                         cantidad_pendiente_op -= cantidad_real_linea
                         
-                        # ❗️ Si esta línea ya completa la OP, no asignar más líneas
                         if cantidad_pendiente_op <= 0:
                             break 
                 
-                # --- Fuera del bucle for cap_linea ---
-
+                # --- Gestión de avance de fechas ---
                 if se_reservo_tiempo_en_fecha:
                     horas_pendientes -= horas_a_reservar_hoy 
                 
                     if fecha_inicio_real_asignada is None:
                         fecha_inicio_real_asignada = fecha_a_buscar
                     
-                    print(f"       > Reservadas {horas_a_reservar_hoy}hs enteras en {fecha_a_buscar}. Faltan {horas_pendientes}hs. Quedan {cantidad_pendiente_op} unidades.")
+                    print(f"       > Reservadas {horas_a_reservar_hoy}hs enteras en {fecha_a_buscar}. Faltan {horas_pendientes}hs. Quedan {cantidad_pendiente_op} u.")
                 
+                # Si terminamos la cantidad, forzamos salida
                 if cantidad_pendiente_op <= 0:
-                    horas_pendientes = 0 # Forzar salida del while
-                    
-                if (horas_pendientes > 0) or (not se_reservo_tiempo_en_fecha):
+                    horas_pendientes = 0 
+                    break
+
+                # Si todavía falta (cantidad u horas) o si no pudimos reservar hoy, AVANZAR
+                # (La lógica simplificada: siempre avanzamos al siguiente día hábil para la siguiente iteración)
+                fecha_a_buscar += timedelta(days=1)
+                while fecha_a_buscar.weekday() >= 5:
                     fecha_a_buscar += timedelta(days=1)
                 
-                while fecha_a_buscar.weekday() >= 5:
-                        fecha_a_buscar += timedelta(days=1)
-
-                # Reseteamos lógica de horas si cambiamos de día y aún falta cantidad
+                # Si cambiamos de día y aún falta cantidad, renovamos las horas disponibles para el nuevo día
                 if cantidad_pendiente_op > 0:
                     horas_pendientes = horas_necesarias_totales
-
-                elif se_reservo_tiempo_en_fecha:
-                     # Avanzamos un día
-                     fecha_a_buscar += timedelta(days=1)
-
-                    # ✅ MODIFICACIÓN 3: Aquí también, saltar fines de semana
-                     while fecha_a_buscar.weekday() >= 5:
-                        fecha_a_buscar += timedelta(days=1)
 
 
             # --- Fuera del bucle while ---
             if fecha_inicio_real_asignada is None:
                 fecha_inicio_real_asignada = fecha_inicio_minima_real
             
+            # La fecha fin es el último día que se usó con éxito
+            # Como el bucle avanza 'fecha_a_buscar' al final, debemos retroceder uno.
             fecha_fin_real_asignada = fecha_a_buscar - timedelta(days=1)
-            
-            # Asegurarse que la fecha de fin no sea anterior a la de inicio
+            while fecha_fin_real_asignada.weekday() >= 5: # Ajuste por si acaso retrocedió a finde
+                 fecha_fin_real_asignada -= timedelta(days=1)
+
             if fecha_fin_real_asignada < fecha_inicio_real_asignada:
                 fecha_fin_real_asignada = fecha_inicio_real_asignada
 
@@ -752,7 +744,7 @@ def ejecutar_planificacion_diaria_mrp(fecha_simulada: date):
             nueva_fecha_entrega_sugerida_date = op.fecha_fin_planificada + timedelta(days=dias_totales_margen)
 
             while nueva_fecha_entrega_sugerida_date.weekday() >= 5:
-                nueva_fecha_entrega_sugerida_date += timedelta(days=1)
+                nueva_fecha_entrega_sugerida_date += timedelta(days=1) 
 
             # 2. Verificamos si hay retraso (Si la nueva fecha es MAYOR a la original)
             if nueva_fecha_entrega_sugerida_date > ov.fecha_entrega.date():
@@ -861,12 +853,27 @@ def ejecutar_planificacion_diaria_mrp(fecha_simulada: date):
             
         fecha_necesaria_mp = fecha_requerida_mas_temprana
         lead_time = proveedor.lead_time_days
+
         fecha_entrega_oc = fecha_necesaria_mp
+
+        # Si cae Sábado (5) o Domingo (6), mover al Lunes siguiente
+        while fecha_entrega_oc.weekday() >= 5:
+            fecha_entrega_oc += timedelta(days=1)
+
         fecha_solicitud_oc = fecha_entrega_oc - timedelta(days=lead_time)
+
+        # Si cae Sábado o Domingo, adelantar al VIERNES ANTERIOR (pedir antes)
+        while fecha_solicitud_oc.weekday() >= 5:
+            fecha_solicitud_oc -= timedelta(days=1)
+
 
         if fecha_solicitud_oc < hoy:
             fecha_solicitud_oc = hoy
             fecha_entrega_oc = hoy + timedelta(days=lead_time)
+
+            while fecha_entrega_oc.weekday() >= 5:
+                fecha_entrega_oc += timedelta(days=1)
+
             print(f"   !ALERTA OC: Pedido a {proveedor.nombre} está retrasado. Nueva entrega: {fecha_entrega_oc}")
             
         oc, created = OrdenCompra.objects.get_or_create(
@@ -880,7 +887,7 @@ def ejecutar_planificacion_diaria_mrp(fecha_simulada: date):
         else:
             print(f"   > Usando OC EXISTENTE {oc.id_orden_compra} para {proveedor.nombre} (Entrega: {fecha_entrega_oc})")
         
-        
+
         for mp_id, cantidad_necesaria_hoy in info["items"].items():
                 item_oc, item_created = OrdenCompraMateriaPrima.objects.get_or_create(
                     id_orden_compra=oc,
