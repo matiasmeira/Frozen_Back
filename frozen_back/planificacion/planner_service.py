@@ -99,15 +99,19 @@ def ejecutar_planificador(fecha_simulada: date):
         return
 
     # ===================================================================
-    # ✅ 3) CREAR MODELO (Basado en TAREAS, no en OPs) (Sin cambios)
+    # ✅ 3) CREAR MODELO (Basado en TAREAS, no en OPs)
     # ===================================================================
     
-    # ... (Esta sección no cambia) ...
     model = cp_model.CpModel()
     intervals_por_linea = defaultdict(list)
     todas_tandas = []
     all_end_vars = []
+    
+    # Variable auxiliar para calcular el techo de la producción total (para definir la variable del solver)
+    suma_total_objetivo_global = 0
+
     print("✅ Generando tandas según CalendarioProduccion...")
+
     for cal_task in tasks_today:
         op = cal_task.id_orden_produccion
         linea = cal_task.id_linea_produccion
@@ -115,55 +119,101 @@ def ejecutar_planificador(fecha_simulada: date):
         total_task_qty = int(cal_task.cantidad_a_producir)
         max_horas_tarea = int(cal_task.horas_reservadas)
         max_minutos_tarea = max_horas_tarea * 60
+        
+        # Validaciones básicas
         if linea.id_linea_produccion not in lineas_activas_ids:
             print(f"❌ Línea {linea.id_linea_produccion} no está disponible. Omitiendo tarea de OP {op.id_orden_produccion}.")
             continue
+            
         if (producto_id, linea.id_linea_produccion) not in capacidad_lookup:
             print(f"❌ No hay regla para OP {op.id_orden_produccion} en Línea {linea.id_linea_produccion}. Omitiendo.")
             continue
+            
         regla = capacidad_lookup[(producto_id, linea.id_linea_produccion)]
         tamano_tanda = regla["cant_por_hora"]
         minimo = regla["cantidad_minima"] or 0
+        
         if tamano_tanda <= 0:
             print(f"⚠️ TAMAÑO TANDA 0: OP {op.id_orden_produccion} en línea {linea.id_linea_produccion}")
             continue
+            
         max_tandas = math.ceil(total_task_qty / tamano_tanda)
         if max_tandas == 0:
             continue
+            
         task_tandas = [] 
+        
+        # 🆕 Variable para sumar lo que REALMENTE vamos a pedir al solver
+        # (Esto será >= total_task_qty si forzamos mínimos)
+        cantidad_objetivo_solver = 0
+        
         for t in range(max_tandas):
+            
+            # Cálculo del tamaño de esta tanda específica
             if t == max_tandas - 1:
+                # Es la última tanda
                 sobra = total_task_qty - (tamano_tanda * (max_tandas - 1))
+                
                 if sobra < minimo:
-                    # LÍNEA CORREGIDA:
-                    print(f"⚠️ Tanda final de Tarea {cal_task.id} (OP {op.id_orden_produccion}) en línea {linea.id_linea_produccion} ({sobra}u) < mínimo ({minimo}). No se generará.")
-                    continue
-                tamano_real = sobra
+                    # ✅ CORRECCIÓN: En lugar de 'continue', forzamos el mínimo.
+                    # Esto evita que la ecuación sea infactible.
+                    print(f"⚠️ Ajuste: Tanda final (OP {op.id_orden_produccion}) de {sobra}u es menor al mínimo ({minimo}u). Se producirá el mínimo ({minimo}u).")
+                    tamano_real = minimo # Producimos un poco de más (Stock sobra)
+                else:
+                    tamano_real = sobra
             else:
+                # Tanda completa normal (intermedia)
                 tamano_real = tamano_tanda
+            
+            # Acumulamos la cantidad real que tendrá esta tanda para la restricción final
+            cantidad_objetivo_solver += tamano_real
+
+            # Cálculo de duración
             duracion_real = math.ceil(60 * (tamano_real / tamano_tanda))
             if duracion_real <= 0:
                 continue
+                
+            # Variables del Solver
             lit = model.NewBoolVar(f"cal{cal_task.id}_t{t}")
-            start = model.NewIntVar(0, HORIZONTE_MINUTOS, "")
-            end = model.NewIntVar(0, HORIZONTE_MINUTOS, "")
-            interval = model.NewOptionalIntervalVar(start, duracion_real, end, lit, "")
+            start = model.NewIntVar(0, HORIZONTE_MINUTOS, f"start_{cal_task.id}_{t}")
+            end = model.NewIntVar(0, HORIZONTE_MINUTOS, f"end_{cal_task.id}_{t}")
+            interval = model.NewOptionalIntervalVar(start, duracion_real, end, lit, f"interval_{cal_task.id}_{t}")
+            
             tanda_info = {
                 "literal": lit, "op": op, "linea": linea, "tamano": tamano_real,
                 "start": start, "end": end, "duracion": duracion_real, "cal_task_id": cal_task.id
             }
+            
             todas_tandas.append(tanda_info)
             task_tandas.append(tanda_info)
             intervals_por_linea[linea.id_linea_produccion].append(interval)
             all_end_vars.append(end)
-        model.Add(sum(tanda["literal"] * tanda["tamano"] for tanda in task_tandas) == total_task_qty)
+        
+        # 🆕 RESTRICCIÓN DE CANTIDAD TOTAL
+        # La suma de las tandas activas debe ser igual al objetivo ajustado (incluyendo mínimos forzados)
+        model.Add(sum(tanda["literal"] * tanda["tamano"] for tanda in task_tandas) == cantidad_objetivo_solver)
+        
+        # RESTRICCIÓN DE TIEMPO (Calendario)
+        # Intentamos respetar las horas reservadas en el MRP
         model.Add(sum(tanda["literal"] * tanda["duracion"] for tanda in task_tandas) <= max_minutos_tarea)
+
+        # Sumamos al total global para definir el dominio de la variable objetivo
+        suma_total_objetivo_global += cantidad_objetivo_solver
+
+    # RESTRICCIÓN DE NO SUPERPOSICIÓN
     for linea_id, intervals in intervals_por_linea.items():
         model.AddNoOverlap(intervals)
+        
+    # VARIABLES OBJETIVO
     makespan = model.NewIntVar(0, HORIZONTE_MINUTOS, "makespan")
-    model.AddMaxEquality(makespan, all_end_vars)
-    produccion_total = model.NewIntVar(0, sum(t.cantidad_a_producir for t in tasks_today), "produccion_total")
+    if all_end_vars:
+        model.AddMaxEquality(makespan, all_end_vars)
+    
+    # Maximizar la producción total realizada
+    # (Aunque forzamos la igualdad arriba, esto ayuda al solver a orientarse)
+    produccion_total = model.NewIntVar(0, suma_total_objetivo_global, "produccion_total")
     model.Add(produccion_total == sum(tanda["literal"] * tanda["tamano"] for tanda in todas_tandas))
+    
     model.Maximize(produccion_total)
     
     # ===================================================================
