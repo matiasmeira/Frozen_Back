@@ -12,7 +12,7 @@ from empleados.models import Empleado
 from stock.models import LoteProduccion  # según tu estructura
 from django.db import models
 from rest_framework import status
-from .services import  cancelar_orden_venta, facturar_orden_y_descontar_stock, crear_nota_credito_y_devolver_stock, registrar_orden_venta_y_actualizar_estado
+from .services import  cancelar_orden_venta, facturar_orden_y_descontar_stock, crear_nota_credito_y_devolver_stock, registrar_orden_venta_y_actualizar_estado, procesar_orden_venta_online
 from .models import Factura, OrdenVenta, Reclamo, Sugerencia, NotaCredito
 from django.db import transaction
 from .filters import OrdenVentaFilter
@@ -362,12 +362,24 @@ def crear_orden_venta(request):
                         cantidad=p["cantidad"]
                     )
 
-               # --- CAMBIO ---
-                # LLAMADA ÚNICA AL SERVICIO SIMPLE
-                registrar_orden_venta_y_actualizar_estado(orden_venta)
-                # --- FIN CAMBIO ---
+               # --- LÓGICA DIFERENCIADA POR TIPO DE VENTA ---
+                if tipo_venta_enviado == 'ONL':
+                    # Venta Online: Intenta reservar YA y pide pago
+                    resultado_online = procesar_orden_venta_online(orden_venta)
+                    
+                    # Opcional: Si falla la reserva (sin stock), podrías querer lanzar error
+                    if not resultado_online['exito']:
+                         # Si decides que sin stock no se vende online:
+                         # raise Exception(f"No hay stock suficiente: {resultado_online['mensaje']}")
+                         pass 
 
-            # Devolvemos la orden con su estado final y todos sus datos
+                else:
+                    # Venta Empresarial (EMP): Solo registra y espera al Planificador MRP
+                    registrar_orden_venta_y_actualizar_estado(orden_venta)
+                # ---------------------------------------------
+
+            # Devolvemos la orden con el estado actualizado
+            orden_venta.refresh_from_db()
             serializer = OrdenVentaSerializer(orden_venta)
             return JsonResponse(serializer.data, status=201)
 
