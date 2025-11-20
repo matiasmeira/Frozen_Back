@@ -285,3 +285,4 @@ def get_traceability_backward_op(id_orden_produccion):
 
     except ObjectDoesNotExist:
         return {"error": f"No se encontró la Orden de Producción {id_orden_produccion}"}
+    

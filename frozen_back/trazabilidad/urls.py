@@ -2,7 +2,7 @@
 
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import TrazabilidadViewSet
+from .views import TrazabilidadViewSet, ordenes_por_lote_mp, obtener_lotes_produccion_por_mp
 
 # Creamos un router
 router = DefaultRouter()
@@ -19,5 +19,8 @@ router.register(r'trazabilidad', TrazabilidadViewSet, basename='trazabilidad')
 
 # Las URLs de la API se incluyen aquí.
 urlpatterns = [
+    # Quedará como: /trazabilidad/ordenes-por-lote/123/
+    path('ordenes-por-lote/<int:id_lote>/', ordenes_por_lote_mp, name='ordenes-por-lote'),
+    path('lotes-produccion/por-mp/<int:id_lote_mp>/', obtener_lotes_produccion_por_mp, name='lotes-produccion-por-mp'),
     path('', include(router.urls)),
 ]

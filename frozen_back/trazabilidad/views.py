@@ -2,10 +2,15 @@ from django.shortcuts import render
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from django.http import JsonResponse
+from django.views.decorators.http import require_http_methods
+
+
 # Asegúrate de que estas importaciones apunten a los servicios que corregimos
 from .services import get_traceability_for_order, get_traceability_forward, get_traceability_backward_op 
-
-from stock.models import ReservaStock, LoteProduccion
+from produccion.models import OrdenProduccion
+from stock.models import ReservaMateriaPrima
+from stock.models import ReservaStock, LoteProduccion, LoteProduccionMateria
 from ventas.models import OrdenVenta, OrdenVentaProducto
 from ventas.serializers import OrdenVentaSerializer
 
@@ -139,3 +144,103 @@ class TrazabilidadViewSet(viewsets.ViewSet):
              return Response({"error": "ID de Lote de Producción no válido."}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+
+
+@require_http_methods(["GET"])
+def ordenes_por_lote_mp(request, id_lote):
+    try:
+        # 1. Obtener IDs desde la reserva
+        reservas = ReservaMateriaPrima.objects.filter(id_lote_materia_prima=id_lote)
+        
+        if not reservas.exists():
+            return JsonResponse({"exito": False, "mensaje": "Lote no encontrado o sin uso"}, status=404)
+
+        ids_ordenes = reservas.values_list('id_orden_produccion', flat=True)
+
+        # 2. Consultar las órdenes TRAYENDO los datos relacionados
+        # select_related hace un JOIN SQL automático con las tablas Producto y Estado
+        ordenes = OrdenProduccion.objects.filter(
+            id_orden_produccion__in=ids_ordenes
+        ).select_related('id_producto', 'id_estado_orden_produccion')
+
+        # 3. Construir la lista manualmente para que quede bonita y clara
+        lista_ordenes = []
+        for orden in ordenes:
+            print()
+
+            lista_ordenes.append({
+                "id_orden": orden.id_orden_produccion,
+                "fecha_creacion": orden.fecha_creacion,
+                "cantidad_a_producir": orden.cantidad,
+                "fecha_planificada": orden.fecha_planificada,
+                "lote_producto": orden.id_lote_produccion_id,
+            
+                # AQUÍ ACCEDEMOS A LOS DATOS DE LAS OTRAS TABLAS
+                "producto": orden.id_producto.nombre,
+                "estado": orden.id_estado_orden_produccion.descripcion
+            })
+
+        # 4. Respuesta Final
+        data = {
+            "exito": True,
+            "lote_consultado": id_lote,
+            "total_ordenes": len(lista_ordenes),
+            "resultados": lista_ordenes
+        }
+
+        return JsonResponse(data)
+
+    except Exception as e:
+        return JsonResponse({"exito": False, "error": str(e)}, status=500)
+    
+@require_http_methods(["GET"])
+def obtener_lotes_produccion_por_mp(request, id_lote_mp):
+    try:
+        # --- PASO 1: Buscar reservas (Igual que antes) ---
+        reservas = ReservaMateriaPrima.objects.filter(id_lote_materia_prima=id_lote_mp)
+        
+        if not reservas.exists():
+            return JsonResponse({"exito": False, "mensaje": "Lote MP no encontrado o sin uso"}, status=404)
+
+        ids_ordenes = reservas.values_list('id_orden_produccion', flat=True)
+
+        # --- PASO 2: Buscar IDs de Lotes Finales (Igual que antes) ---
+        ordenes_con_lote = OrdenProduccion.objects.filter(
+            id_orden_produccion__in=ids_ordenes,
+            id_lote_produccion__isnull=False 
+        )
+        ids_lotes_finales = ordenes_con_lote.values_list('id_lote_produccion_id', flat=True)
+
+        if not ids_lotes_finales:
+            return JsonResponse({"exito": True, "mensaje": "Sin lotes finales aún", "lotes_produccion": []})
+
+        # --- PASO 3: Consultar Lotes + PRODUCTO ---
+        # AGREGAMOS .select_related('id_producto')
+        lotes = LoteProduccion.objects.filter(
+            id_lote_produccion__in=ids_lotes_finales
+        ).select_related('id_producto')
+
+        # --- PASO 4: Construir respuesta con el Nombre ---
+        lista_resultados = []
+        for lote in lotes:
+            lista_resultados.append({
+                "id_lote_produccion": lote.id_lote_produccion,
+                "fecha_produccion": lote.fecha_produccion,
+                "cantidad": lote.cantidad,
+                
+                # AQUÍ ESTÁ EL CAMBIO:
+                # Accedemos al objeto relacionado para sacar el nombre
+                "id_producto": lote.id_producto.id_producto, 
+                "producto_nombre": lote.id_producto.nombre  
+            })
+
+        return JsonResponse({
+            "exito": True,
+            "lote_materia_prima_origen": id_lote_mp,
+            "cantidad_encontrada": len(lista_resultados),
+            "lotes_produccion": lista_resultados
+        })
+
+    except Exception as e:
+        return JsonResponse({"exito": False, "error": str(e)}, status=500)
