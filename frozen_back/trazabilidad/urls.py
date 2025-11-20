@@ -21,6 +21,6 @@ router.register(r'trazabilidad', TrazabilidadViewSet, basename='trazabilidad')
 urlpatterns = [
     path('trazabilidad/ordenes-produccion-por-lote-mp/<int:id_lote>/', ordenes_por_lote_mp),
     path('trazabilidad/lotes-producto-por-lote-mp/<int:id_lote_mp>/', obtener_lotes_produccion_por_mp),
-    path('trazabilidad/ordenes-venta-por-lote-mp/int:id_lote>/', obtener_ordenes_venta_por_lote),
+    path('trazabilidad/ordenes-venta-por-lote-mp/<int:id_lote>/', obtener_ordenes_venta_por_lote),
     path('', include(router.urls)),
 ]
