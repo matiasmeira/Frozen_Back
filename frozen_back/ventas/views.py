@@ -633,10 +633,23 @@ class VerificarFactibilidadOrdenCompletaView(APIView):
 def ventas_por_tipo_producto(request):
     """
     Retorna el volumen de ventas agrupado por tipo de producto
+    para el período de hoy hasta 30 días después
     """
     try:
-        # Obtener TODAS las ventas sin filtrar por estado
-        ventas_por_tipo = OrdenVentaProducto.objects.all().values(
+        from datetime import date, timedelta
+        from django.utils import timezone
+        
+        # Calcular fechas del período
+        fecha_hoy = timezone.now().date()
+        fecha_limite = fecha_hoy + timedelta(days=30)
+        
+        print(f"📅 Filtrando ventas desde {fecha_hoy} hasta {fecha_limite}")
+        
+        # Filtrar ventas por el período mensual
+        ventas_por_tipo = OrdenVentaProducto.objects.filter(
+            id_orden_venta__fecha__gte=fecha_hoy,
+            id_orden_venta__fecha__lte=fecha_limite
+        ).values(
             'id_producto__id_tipo_producto__id_tipo_producto',
             'id_producto__id_tipo_producto__descripcion'
         ).annotate(
@@ -644,39 +657,66 @@ def ventas_por_tipo_producto(request):
             monto_total=Sum(F('cantidad') * F('id_producto__precio'))
         ).order_by('-total_unidades')
         
-        # Formatear para el gráfico
-        chart_data = {
-            'labels': [item['id_producto__id_tipo_producto__descripcion'] for item in ventas_por_tipo],
-            'datasets': [{
-                'label': 'Unidades Vendidas',
-                'data': [item['total_unidades'] for item in ventas_por_tipo],
-                'backgroundColor': [
-                    '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', 
-                    '#9966FF', '#FF9F40', '#8AC926', '#1982C4',
-                    '#6A4C93', '#FF595E'
-                ],
-                'borderColor': [
-                    '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', 
-                    '#9966FF', '#FF9F40', '#8AC926', '#1982C4',
-                    '#6A4C93', '#FF595E'
-                ],
-                'borderWidth': 2
-            }]
-        }
+        print(f"📊 Se encontraron {ventas_por_tipo.count()} tipos de productos con ventas")
         
-        # Agregar información adicional para tooltips
-        chart_data['detalles'] = [
-            {
-                'tipo': item['id_producto__id_tipo_producto__descripcion'],
-                'unidades': item['total_unidades'],
-                'monto': float(item['monto_total']) if item['monto_total'] else 0
+        # Si no hay datos, retornar estructura vacía
+        if not ventas_por_tipo:
+            chart_data = {
+                'labels': ['Sin ventas en el período'],
+                'datasets': [{
+                    'label': 'Unidades Vendidas',
+                    'data': [0],
+                    'backgroundColor': ['#CCCCCC'],
+                    'borderColor': ['#999999'],
+                    'borderWidth': 2
+                }],
+                'detalles': [],
+                'periodo': {
+                    'desde': fecha_hoy.strftime('%Y-%m-%d'),
+                    'hasta': fecha_limite.strftime('%Y-%m-%d'),
+                    'dias': 30
+                }
             }
-            for item in ventas_por_tipo
-        ]
+        else:
+            # Formatear para el gráfico
+            chart_data = {
+                'labels': [item['id_producto__id_tipo_producto__descripcion'] for item in ventas_por_tipo],
+                'datasets': [{
+                    'label': 'Unidades Vendidas',
+                    'data': [item['total_unidades'] for item in ventas_por_tipo],
+                    'backgroundColor': [
+                        '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', 
+                        '#9966FF', '#FF9F40', '#8AC926', '#1982C4',
+                        '#6A4C93', '#FF595E'
+                    ],
+                    'borderColor': [
+                        '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', 
+                        '#9966FF', '#FF9F40', '#8AC926', '#1982C4',
+                        '#6A4C93', '#FF595E'
+                    ],
+                    'borderWidth': 2
+                }],
+                'periodo': {
+                    'desde': fecha_hoy.strftime('%Y-%m-%d'),
+                    'hasta': fecha_limite.strftime('%Y-%m-%d'),
+                    'dias': 30
+                }
+            }
+            
+            # Agregar información adicional para tooltips
+            chart_data['detalles'] = [
+                {
+                    'tipo': item['id_producto__id_tipo_producto__descripcion'],
+                    'unidades': item['total_unidades'],
+                    'monto': float(item['monto_total']) if item['monto_total'] else 0
+                }
+                for item in ventas_por_tipo
+            ]
         
         return Response(chart_data)
         
     except Exception as e:
+        print(f"❌ Error en ventas_por_tipo_producto: {str(e)}")
         return Response(
             {'error': f'Error al obtener datos: {str(e)}'}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
