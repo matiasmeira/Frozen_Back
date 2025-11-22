@@ -111,76 +111,65 @@ def cancelar_orden_venta(orden_venta):
 @transaction.atomic
 def crear_nota_credito_y_devolver_stock(orden_venta: OrdenVenta, motivo: str = None):
     """
-    1. Crea una Nota de Crédito para la factura de la orden.
-    2. Encuentra las reservas 'Utilizadas' de esa orden.
-    3. Devuelve el stock físico (cantidad) a los lotes correspondientes.
-    4. Cambia el estado de los lotes a 'Disponible' si estaban 'Agotados'.
-    5. Cambia el estado de las reservas a 'Devolución NC'.
-    6. Cambia el estado de la orden a 'Devolución NC'.
-    7. Dispara la re-evaluación de stock para otras órdenes pendientes.
+    Recibe una OrdenVenta, busca su factura, y genera la NC + Devolución de stock a Cuarentena.
     """
-    print(f"Iniciando creación de Nota de Crédito para Orden #{orden_venta.pk}...")
+    print(f"Iniciando proceso de NC para Orden #{orden_venta.pk}...")
 
-    # 1. Validar estado de la orden y encontrar factura
-    estado_facturada, _ = EstadoVenta.objects.get_or_create(descripcion__iexact="Pagada")
-    if orden_venta.id_estado_venta != estado_facturada:
-        raise Exception(f"La orden #{orden_venta.pk} no está 'Pagada'. No se puede crear nota de crédito.")
+    # 1. Validar estado 'Pagada'
+    estado_facturada = EstadoVenta.objects.filter(descripcion__iexact="Pagada").first()
+    if not estado_facturada or orden_venta.id_estado_venta != estado_facturada:
+        raise Exception(f"La orden #{orden_venta.pk} no está en estado 'Pagada'.")
 
+    # 2. Buscar la Factura asociada a esta Orden
+    #    (Esto es lo que permite que el usuario solo envíe el ID de la orden)
     try:
         factura = Factura.objects.get(id_orden_venta=orden_venta)
     except Factura.DoesNotExist:
-        raise Exception(f"No se encontró una factura para la orden #{orden_venta.pk}.")
+        raise Exception(f"La Orden #{orden_venta.pk} no tiene una factura generada asociada.")
 
-    # 2. Validar que no exista ya una NC
+    # 3. Validar que no exista NC previa
     if NotaCredito.objects.filter(id_factura=factura).exists():
-        raise Exception(f"Ya existe una nota de crédito para la factura #{factura.pk}.")
+        raise Exception(f"Ya existe una Nota de Crédito para la factura de la Orden #{orden_venta.pk}.")
 
-    # 3. Obtener estados necesarios
-    estado_utilizada = EstadoReserva.objects.get(descripcion="Utilizada")
-    estado_devuelta_nc, _ = EstadoReserva.objects.get_or_create(descripcion="Devolución NC")
-    estado_disponible, _ = EstadoLoteProduccion.objects.get_or_create(descripcion="Disponible")
+    # 4. Obtener Estados
+    estado_reserva_utilizada = EstadoReserva.objects.get(descripcion="Utilizada")
+    estado_reserva_devuelta, _ = EstadoReserva.objects.get_or_create(descripcion="Devolución NC")
     estado_orden_devuelta, _ = EstadoVenta.objects.get_or_create(descripcion="Devolución NC")
+    estado_lote_cuarentena, _ = EstadoLoteProduccion.objects.get_or_create(descripcion="Cuarentena")
 
-    # 4. Encontrar las reservas que se usaron para esta orden
+    # 5. Buscar Reservas Utilizadas
     reservas_utilizadas = ReservaStock.objects.filter(
         id_orden_venta_producto__id_orden_venta=orden_venta,
-        id_estado_reserva=estado_utilizada
+        id_estado_reserva=estado_reserva_utilizada
     ).select_related('id_lote_produccion', 'id_orden_venta_producto__id_producto')
 
     if not reservas_utilizadas.exists():
-        raise Exception(f"No se encontraron reservas 'Utilizadas' para la orden #{orden_venta.pk}. No se puede revertir el stock.")
+        raise Exception("No hay stock reservado/utilizado para devolver en esta orden.")
 
-    # 5. Crear la Nota de Crédito
+    # 6. Crear Nota de Crédito
     nota_credito = NotaCredito.objects.create(
         id_factura=factura,
-        motivo=motivo or "Devolución de cliente"
+        motivo=motivo or f"Devolución Ref. Orden #{orden_venta.pk}"
     )
 
-    productos_afectados = set()
-
-    # 6. Devolver el stock a los lotes
+    # 7. Generar NUEVOS lotes en Cuarentena
     for reserva in reservas_utilizadas:
-        lote = reserva.id_lote_produccion
+        lote_origen = reserva.id_lote_produccion
         cantidad_a_devolver = reserva.cantidad_reservada
-
-        print(f"  > Devolviendo {cantidad_a_devolver} unidades al Lote #{lote.pk} (Producto: {reserva.id_orden_venta_producto.id_producto.nombre})")
-
-        # Devolvemos la cantidad
-        lote.cantidad = F('cantidad') + cantidad_a_devolver
         
-        # Si el lote estaba 'Agotado', vuelve a estar 'Disponible'
-        lote.id_estado_lote_produccion = estado_disponible
-        
-        lote.save()
-        productos_afectados.add(reserva.id_orden_venta_producto.id_producto)
+        LoteProduccion.objects.create(
+            id_producto=lote_origen.id_producto,
+            fecha_produccion=lote_origen.fecha_produccion,
+            fecha_vencimiento=lote_origen.fecha_vencimiento,
+            cantidad=cantidad_a_devolver,
+            id_estado_lote_produccion=estado_lote_cuarentena
+            # Recuerda: si tienes campos obligatorios extra en la BD, agrégalos aquí.
+        )
 
-    # 7. Actualizar estado de las reservas
-    reservas_utilizadas.update(id_estado_reserva=estado_devuelta_nc)
-
-    # 8. Actualizar estado de la Orden de Venta
+    # 8. Actualizar Reservas y Orden
+    reservas_utilizadas.update(id_estado_reserva=estado_reserva_devuelta)
     orden_venta.id_estado_venta = estado_orden_devuelta
     orden_venta.save()
-
 
     return nota_credito
 

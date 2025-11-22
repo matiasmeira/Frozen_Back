@@ -516,39 +516,35 @@ def cambiar_estado_orden_venta(request):
 
 
 class NotaCreditoViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet para crear y ver Notas de Crédito.
-    La creación de una NC dispara la devolución de stock.
-    """
     queryset = NotaCredito.objects.all().order_by('-fecha')
     serializer_class = NotaCreditoSerializer
 
     def create(self, request, *args, **kwargs):
         """
-        Sobre-escribe el método POST para crear una NC.
-        Espera: { "id_factura": <id>, "motivo": "<texto>" }
+        Crea una NC a partir de una Orden de Venta.
+        Espera: { "id_orden_venta": <id>, "motivo": "<texto>" }
         """
-        id_factura = request.data.get('id_factura')
+        # 1. Cambio aquí: Recibimos el ID de la Orden
+        id_orden_venta = request.data.get('id_orden_venta')
         motivo = request.data.get('motivo')
 
-        if not id_factura:
-            return Response({"error": "El campo 'id_factura' es obligatorio."}, status=status.HTTP_400_BAD_REQUEST)
+        if not id_orden_venta:
+            return Response({"error": "El campo 'id_orden_venta' es obligatorio."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            factura = Factura.objects.get(pk=id_factura)
-            orden_venta = factura.id_orden_venta
+            # 2. Buscamos la Orden primero
+            orden_venta = OrdenVenta.objects.get(pk=id_orden_venta)
             
-            # Llamamos al servicio que hace toda la magia
+            # 3. Llamamos al servicio pasando la Orden (el servicio buscará la factura asociada)
             nota_credito = crear_nota_credito_y_devolver_stock(orden_venta, motivo)
             
-            # Devolvemos la NC creada
             serializer = self.get_serializer(nota_credito)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
-        except (Factura.DoesNotExist, OrdenVenta.DoesNotExist):
-            return Response({"error": "La factura o la orden de venta asociada no existen."}, status=status.HTTP_404_NOT_FOUND)
+        except OrdenVenta.DoesNotExist:
+            return Response({"error": f"No existe la Orden de Venta #{id_orden_venta}."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
-            # Captura errores del servicio (ej. "Ya existe NC", "Orden no pagada")
+            # Captura errores lógicos (Ej: Orden no pagada, Factura no encontrada, etc.)
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         
 
