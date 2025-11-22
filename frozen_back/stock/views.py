@@ -53,9 +53,10 @@ class EstadoLoteMateriaPrimaViewSet(viewsets.ModelViewSet):
 class LoteProduccionViewSet(viewsets.ModelViewSet):
     queryset = LoteProduccion.objects.all()
     serializer_class = LoteProduccionSerializer
-    filter_backends = [filters.SearchFilter, DjangoFilterBackend]
+    filter_backends = [filters.SearchFilter, DjangoFilterBackend, filters.OrderingFilter]
     search_fields = ["id_producto__nombre"]
     filterset_fields = ["id_producto", "id_estado_lote_produccion", "fecha_produccion", "fecha_vencimiento"]
+    ordering = ['-id_lote_produccion']
 
     @action(detail=False, methods=['delete'], url_path='bulk-delete')
     def bulk_delete(self, request):
