@@ -68,18 +68,17 @@ def replanificar_ops_por_capacidad(
         # Filtro A: Estado Activo (Incluye 'Planificada')
         id_estado_orden_produccion__in=estados_activos_para_replanificar,
         
-        # 🚨 FILTRO B CORREGIDO: EXISTENCIA DE RESERVAS FUTURAS
-        # Incluye OPs con fecha de inicio pasada que aún tienen trabajo pendiente.
-        reservas_calendario__fecha__gte=fecha_minima_replanificacion 
+        # Hemos quitado el filtro de calendario (reservas_calendario__fecha__gte) 
+        # para que las OPs activas siempre sean elegibles.
         
     ).annotate(
-        # 🚨 CÁLCULO CORREGIDO: Sumar la producción de OTs Finalizadas
-        # Se asume que el campo en OrdenDeTrabajo es 'cantidad_producida_reportada' o similar.
-        # Si tu modelo de OT solo tiene 'cantidad_programada', ajusta el campo.
+        # 🚨 CÁLCULO CORREGIDO: (Utilizando el Related Name 'ordenes_de_trabajo')
+        # Suma la 'cantidad_programada' de OTs en estados que ya no requieren planificación
         cantidad_producida_real=Coalesce(
             Sum(
-                # Usamos 'cantidad_programada' porque es la cantidad que la OT "consumió" de la OP
+                # Campo a sumar en el modelo OrdenTrabajo
                 'ordenes_de_trabajo__cantidad_programada', 
+                # Filtro para solo incluir OTs que ya están asignadas o completadas
                 filter=Q(ordenes_de_trabajo__id_estado_orden_trabajo__in=estados_ot_consumidos)
             ), 
             0
@@ -90,9 +89,6 @@ def replanificar_ops_por_capacidad(
         # Filtro C: Solo si aún les queda trabajo por hacer
         cantidad_pendiente__gt=0 
     ).select_related('id_producto').order_by('fecha_planificada').distinct()
-
-    if productos_a_replanificar_ids:
-        ops_elegibles_query = ops_elegibles_query.filter(id_producto__in=productos_a_replanificar_ids)
         
     ops_a_replanificar = list(ops_elegibles_query)
     
