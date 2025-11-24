@@ -51,8 +51,8 @@ def replanificar_ops_por_capacidad(
         raise 
         
     estados_activos_para_replanificar = [
-        estado_op_en_espera, 
-        estado_op_pendiente_inicio, 
+        #estado_op_en_espera, 
+        #estado_op_pendiente_inicio, 
         estado_op_planificada,
         estado_op_en_proceso
     ]
@@ -113,16 +113,20 @@ def replanificar_ops_por_capacidad(
         print(f"\n   --- Replanificando OP {op.id_orden_produccion} ({producto.nombre}).")
         print(f"     > Cantidad restante: {cantidad_a_producir_restante} u. Nuevas horas requeridas: {horas_necesarias_totales} hs.")
 
-        # 4. Limpieza: Borrar todas las reservas de calendario VIEJAS (futuras)
-        CalendarioProduccion.objects.filter(id_orden_produccion=op).delete()
-        print(f"     > Eliminadas reservas de calendario previas (futuras).")
+        # 4. Modificación: Borrar solo las reservas a partir de la fecha mínima de replanificación
+        # Obtener la fecha a partir de la cual se considerará 'futuro'
+        fecha_borrado_minima = fecha_minima_replanificacion 
+        
+        CalendarioProduccion.objects.filter(
+            id_orden_produccion=op,
+            # 🚨 FILTRO CLAVE: Solo borra las reservas en o después de la fecha mínima
+            fecha__gte=fecha_borrado_minima 
+        ).delete()
+        print(f"     > Eliminadas reservas a partir de: {fecha_borrado_minima}.")
         
         # 5. Determinar Fecha de Inicio Mínima (punto de partida)
-        # Empezamos a buscar hueco desde la fecha de inicio original o pasado mañana, lo que sea posterior.
-        fecha_inicio_minima_real = max(
-            op.fecha_planificada.date(), 
-            fecha_minima_replanificacion
-        )
+        # Empezamos a buscar hueco desde la fecha mínima de replanificación.
+        fecha_inicio_minima_real = fecha_minima_replanificacion
         
         # 6. Walk the Calendar (Buscar nuevo hueco)
         cantidad_pendiente_op = cantidad_a_producir_restante
