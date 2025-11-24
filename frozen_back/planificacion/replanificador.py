@@ -51,8 +51,8 @@ def replanificar_ops_por_capacidad(
         raise 
         
     estados_activos_para_replanificar = [
-        #estado_op_en_espera, 
-        #estado_op_pendiente_inicio, 
+        estado_op_en_espera, 
+        estado_op_pendiente_inicio, 
         estado_op_planificada,
         estado_op_en_proceso
     ]
@@ -125,10 +125,14 @@ def replanificar_ops_por_capacidad(
         print(f"     > Eliminadas reservas a partir de: {fecha_borrado_minima}.")
         
         # 5. Determinar Fecha de Inicio Mínima (punto de partida)
-        # Empezamos a buscar hueco desde la fecha mínima de replanificación.
-        fecha_inicio_minima_real = fecha_minima_replanificacion
+        # El punto de partida es el máximo entre la fecha de replanificación forzosa (fecha_minima_replanificacion)
+        # y la fecha planificada original de la OP (que actúa como restricción de inicio).
+        fecha_inicio_minima_real = max(
+            op.fecha_planificada.date(), 
+            fecha_minima_replanificacion
+        )
         
-        # 6. Walk the Calendar (Buscar nuevo hueco)
+       # 6. Walk the Calendar (Buscar nuevo hueco)
         cantidad_pendiente_op = cantidad_a_producir_restante
         horas_pendientes = horas_necesarias_totales 
         fecha_a_buscar = fecha_inicio_minima_real
@@ -137,7 +141,27 @@ def replanificar_ops_por_capacidad(
 
         fecha_inicio_real_asignada = None
         ultimo_dia_trabajado = None
-        reservas_a_crear_bulk = []
+        
+        # 💡 CORRECCIÓN CRÍTICA: La lista debe inicializarse aquí
+        reservas_a_crear_bulk = [] 
+        
+        # 🚨 AJUSTE DE CANTIDAD PENDIENTE (Implementado previamente)
+        cantidad_reservada_no_borrada = CalendarioProduccion.objects.filter(
+            id_orden_produccion=op,
+            fecha__lt=fecha_borrado_minima 
+        ).aggregate(
+            total_reservado=Coalesce(Sum('cantidad_a_producir'), 0)
+        )['total_reservado']
+
+        cantidad_pendiente_op -= cantidad_reservada_no_borrada
+        
+        if cantidad_pendiente_op <= 0:
+            print(f"     > Cantidad cubierta por reservas existentes no borradas. Saltando OP.")
+            continue # <--- Esto hace que el código salte el resto del bucle y vaya a la siguiente OP
+            
+        horas_necesarias_float_nueva = float(cantidad_pendiente_op) / float(cant_total_por_hora)
+        horas_pendientes = math.ceil(horas_necesarias_float_nueva) 
+        horas_pendientes = max(0, horas_pendientes)
         
         # --- INICIO LÓGICA DE CALENDAR WALK ---
         while horas_pendientes > 0 and cantidad_pendiente_op > 0:
@@ -230,20 +254,44 @@ def replanificar_ops_por_capacidad(
 
         # 8. Revisar y Desplazar OVs Vinculadas
         peggings = OrdenProduccionPegging.objects.filter(id_orden_produccion=op).select_related('id_orden_venta_producto__id_orden_venta')
-        
+
         for peg in peggings:
             ov = peg.id_orden_venta_producto.id_orden_venta
             dias_totales_margen = DIAS_BUFFER_ENTREGA_PT + 1
+            
+            # 1. Calcular la nueva fecha sugerida de entrega (objeto datetime.date)
             nueva_fecha_entrega_sugerida_date = op.fecha_fin_planificada + timedelta(days=dias_totales_margen)
             
+            # Asegurar que el día sugerido sea laborable
             while nueva_fecha_entrega_sugerida_date.weekday() >= 5:
-                 nueva_fecha_entrega_sugerida_date += timedelta(days=1) 
+                nueva_fecha_entrega_sugerida_date += timedelta(days=1) 
 
-            if nueva_fecha_entrega_sugerida_date > ov.fecha_entrega.date():
-                print(f"     🚨 ¡ALERTA! OV {ov.id_orden_venta} desplazada a {nueva_fecha_entrega_sugerida_date}.")
-                ov.fecha_entrega = nueva_fecha_entrega_sugerida_date
+            # 2. Obtener la fecha de entrega original de la OV como DATE
+            # Esto resuelve el TypeError (date vs datetime), ya que ov.fecha_entrega es un DateTimeField
+            fecha_entrega_ov_original_date = ov.fecha_entrega.date() 
+            
+            # 3. Determinar si hay un retraso respecto a la fecha original
+            hay_retraso = nueva_fecha_entrega_sugerida_date > fecha_entrega_ov_original_date
+            
+            # 4. Determinar si hay un avance respecto a la fecha original
+            hay_avance = nueva_fecha_entrega_sugerida_date < fecha_entrega_ov_original_date
+
+            # 5. La OV debe reflejar el nuevo pronóstico, sea un avance o un retraso.
+            ov.fecha_entrega = nueva_fecha_entrega_sugerida_date
+            
+            campos_a_actualizar = ['fecha_entrega']
+
+            if hay_retraso:
+                # Se activa la alerta y se actualiza el estado
+                print(f"     🚨 ¡ALERTA! OV {ov.id_orden_venta} desplazada a {nueva_fecha_entrega_sugerida_date}. (RETRASO)")
                 ov.id_estado_venta = estado_ov_en_preparacion 
-                ov.save(update_fields=['fecha_entrega', 'id_estado_venta'])
+                campos_a_actualizar.append('id_estado_venta')
+            elif hay_avance:
+                # Solo se registra el avance, el estado se deja como está
+                print(f"     🎉 ¡AVANCE! OV {ov.id_orden_venta} adelantada a {nueva_fecha_entrega_sugerida_date}.")
+
+            # 6. Guardar los cambios en la OV
+            ov.save(update_fields=campos_a_actualizar)
 
     print("\n--- REPLANIFICACIÓN POR CAPACIDAD FINALIZADA ---")
     return True
