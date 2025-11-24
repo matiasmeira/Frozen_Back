@@ -70,6 +70,8 @@ def replanificar_ops_por_capacidad(
         
         # Hemos quitado el filtro de calendario (reservas_calendario__fecha__gte) 
         # para que las OPs activas siempre sean elegibles.
+        # 💡 NUEVO FILTRO CLAVE: Excluir OPs que no tienen una fecha_planificada asignada
+        fecha_planificada__isnull=False,
         
     ).annotate(
         # 🚨 CÁLCULO CORREGIDO: (Utilizando el Related Name 'ordenes_de_trabajo')
