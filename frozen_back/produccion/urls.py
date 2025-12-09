@@ -1,0 +1,29 @@
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+from .views import (
+    EstadoLineaProduccionViewSet,
+    EstadoOrdenProduccionViewSet,
+    LineaProduccionViewSet,
+    OrdenProduccionViewSet,
+    NoConformidadViewSet,
+    HistorialOrdenProduccionViewSet,
+    porcentaje_desperdicio_historico,
+    OrdenDeTrabajoViewSet,
+    TipoNoConformidadViewSet
+)
+
+router = DefaultRouter()
+router.register(r'estados', EstadoOrdenProduccionViewSet)
+router.register(r'lineas', LineaProduccionViewSet)
+router.register(r'ordenes', OrdenProduccionViewSet)
+router.register(r'noconformidades', NoConformidadViewSet)
+router.register(r'tipos_no_conformidad', TipoNoConformidadViewSet)
+router.register(r'estado_linea_produccion', EstadoLineaProduccionViewSet)  
+router.register(r'historial-ordenes-produccion', HistorialOrdenProduccionViewSet, basename='historial-ordenproduccion')
+router.register(r'ordenes-trabajo', OrdenDeTrabajoViewSet)
+
+ 
+urlpatterns = [
+    path('', include(router.urls)),
+    path('porcentaje-desperdicio/', porcentaje_desperdicio_historico, name='recomendacion-cantidad-produccion'),
+]

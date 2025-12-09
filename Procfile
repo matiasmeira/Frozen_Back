@@ -1,0 +1,1 @@
+web: gunicorn frozen_back.wsgi --chdir /app/frozen_back
