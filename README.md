@@ -168,14 +168,7 @@ Si vas a añadir el cálculo de OEE, incluye tests unitarios para cubrir casos b
 - `produccion/` — modelos y datos de producción.
 - `planificacion/` — lógica de planificación y replanificador (`planificacion/replanificador.py`).
 
-## Contacto
 
-Si necesitas asistencia con la implementación de una funcionalidad (por ejemplo, el endpoint OEE o tests), dime y puedo:
-
-- Implementar `reportes/services.py` con la función `compute_oee`.
-- Añadir la vista DRF y tests básicos.
-
----
 
 Licencia: revisa la política de tu empresa o añade un archivo `LICENSE` si corresponde.
 
